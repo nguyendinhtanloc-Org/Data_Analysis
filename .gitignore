@@ -1,0 +1,34 @@
+# Python environment và caches
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Sensitive configuration - KHÔNG bao giờ commit .env
+.env
+.env.local
+.env.*.local
+
+# Data files - chỉ giữ placeholder
+data/raw/*
+data/processed/*
+data/external/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/external/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store

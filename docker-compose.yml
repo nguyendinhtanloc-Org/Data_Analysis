@@ -1,0 +1,36 @@
+services:
+  postgres:
+    # Container database cho dữ liệu nguồn và kho dữ liệu nội bộ của đồ án.
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  metabase:
+    # Metabase dùng để tạo dashboard và kiểm tra kết quả phân tích.
+    # Pin version để đảm bảo reproducibility giữa các lần chạy.
+    image: metabase/metabase:v0.50.0
+    restart: unless-stopped
+    environment:
+      MB_DB_TYPE: ${METABASE_DB_TYPE}
+      MB_DB_DBNAME: ${METABASE_DB_DBNAME}
+      MB_DB_PORT: ${METABASE_DB_PORT}
+      MB_DB_USER: ${METABASE_DB_USER}
+      MB_DB_PASS: ${METABASE_DB_PASS}
+      MB_DB_HOST: ${METABASE_DB_HOST}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - postgres
+volumes:
+  postgres_data:
