@@ -1,7 +1,5 @@
 # Data_Analysis
 
-# Data_Analysis
-
 Dự án: Kho Dữ liệu & Phân tích Doanh nghiệp (Data Warehouse & Business Analytics)
 
 Khung dự án đã được khởi tạo sẵn, tuân thủ các tiêu chuẩn an toàn và sạch code của DA/DE hiện nay.
@@ -15,82 +13,90 @@ Cấu trúc chính:
 - `tests/` — test case cho ETL
 - `sql/` — các script SQL cho schema
 
-Quy trình an toàn để bắt đầu
+Quy trình chuẩn chỉnh để bắt đầu dự án
 
-1. Sao chép cấu hình mẫu thành `.env` thực tế:
-
+1. Sao chép và thiết lập cấu hình môi trường (.env):
 ```bash
 cp .env.example .env
 ```
+Mở file `.env` và thiết lập các tham số (có thể giữ nguyên mật khẩu `postgres` cho local dev). Đảm bảo `POSTGRES_HOST=localhost` để chạy code từ máy host được thông suốt.
 
-2. Sửa mật khẩu trong `.env` thành giá trị mạnh (không dùng placeholder):
+2. Khởi tạo môi trường ảo Python (Virtualenv):
+```bash
+make venv
+```
+*Lưu ý:* Thực hiện bước này ngay đầu tiên để VS Code và Pylance tự động nhận diện môi trường ảo thông qua file `.vscode/settings.json`, giúp loại bỏ hoàn toàn các lỗi gạch chân đỏ (import path) trên IDE.
 
-Mở file `.env` và đổi `POSTGRES_PASSWORD` và `METABASE_DB_PASS` thành giá trị của bạn.
-
-Nếu chỉ dùng cho dev local, có thể dùng mật khẩu đơn giản (ví dụ: `postgres`) - script validate sẽ cảnh báo nhưng vẫn cho phép.
-
-**Lưu ý:** Phải sửa `.env` XONG trước khi chạy `make validate` ở bước 3.
-
-3. Kiểm tra cấu hình (sau khi .env đã sửa):
-
+3. Kiểm tra tính hợp lệ của cấu hình hệ thống:
 ```bash
 make validate
 ```
+Kiểm tra xem file `.env` đã đúng chưa và các cổng dịch vụ 5432, 3000 có bị ứng dụng khác chiếm dụng không.
 
-Nếu validate báo lỗi, hãy kiểm tra:
-- `.env` file đã tồn tại chưa?
-- Mật khẩu trong `.env` đã sửa thành giá trị mạnh chưa (không để placeholder)?
-- Ports 5432 và 3000 có bị chiếm không?
-
-4. Khởi chạy hạ tầng (Postgres + Metabase):
-
+4. Khởi chạy hạ tầng Docker (Postgres + Metabase):
 ```bash
 make up
 ```
 
-5. Tạo môi trường Python:
-
-```bash
-make venv
-```
-
-Để vào venv shell tương tác (không cần `source` thủ công):
-
-```bash
-make shell
-# Sau đó bạn ở trong virtualenv, có thể chạy python, pip, etc
-```
-
-6. Tạo DB và kiểm tra kết nối:
-
+5. Khởi tạo Database rỗng (AdventureWorks & Metabase):
 ```bash
 make init-db
+```
+*Lưu ý:* Phải chạy bước này SAU khi đã bật hạ tầng ở bước 4 thành công.
+
+6. Kiểm tra kết nối tổng thể:
+```bash
 make test-conn
 ```
+Nếu màn hình in ra `Test connection: 1` tức là mọi thứ đã thông suốt!
+
+---
+
+Quy trình làm việc hàng ngày & Cách Tắt/Thoát
+
+*   **Để bắt đầu ngày làm việc tiếp theo:**
+    ```bash
+    make up
+    ```
+*   **Khi muốn làm việc với Jupyter Notebook:**
+    ```bash
+    make notebook
+    ```
+*   **Khi muốn chạy trực tiếp chương trình ETL:**
+    ```bash
+    make etl
+    ```
+*   **Để DỪNG hoàn toàn các container Docker (khi nghỉ làm):**
+    ```bash
+    make down
+    ```
+*   **Để THOÁT khỏi môi trường ảo (Virtualenv):**
+    *   Nếu bạn vào bằng lệnh `make shell`: Gõ `exit` trong terminal để thoát ra môi trường thường.
+    *   Nếu bạn active bằng lệnh `source .venv/bin/activate`: Gõ `deactivate` trong terminal để tắt môi trường ảo.
+
+---
 
 Bộ lệnh chuẩn cho nhóm:
 
 ```bash
 make validate          # kiểm tra cấu hình trước chạy (CHẠY TRƯỚC TIÊN)
-make up                # khởi động services
-make start             # khởi động services đang dừng
-make stop              # dừng services
-make restart           # khởi động lại services
-make down              # dừng services
-make down-v            # dừng services và xoá volume
-make build             # build images
-make rebuild           # build lại không dùng cache
-make clean             # dừng services và xoá volume
-make logs              # xem logs real-time
-make ps                # xem trạng thái container
-make venv              # tạo virtualenv
-make shell             # vào virtualenv shell (thay vì source)
-make init-db           # tạo database
-make test-conn         # kiểm tra kết nối
-make shell-postgres    # vào shell container postgres
-make psql              # mở psql trong container postgres
-make notebook          # mở Jupyter Lab
-make requirements-check # kiểm tra packages outdated
+make venv              # tạo virtualenv và cài đặt dependencies
+make up                # khởi động các dịch vụ (chạy ngầm)
+make start             # khởi động lại dịch vụ đang dừng
+make stop              # dừng tạm thời các dịch vụ (giữ nguyên dữ liệu)
+make restart           # khởi động lại các dịch vụ
+make down              # dừng hoàn toàn và gỡ bỏ các container
+make down-v            # dừng các dịch vụ và xoá toàn bộ volume dữ liệu
+make clean             # dọn dẹp sạch sẽ container và volumes
+make init-db           # tạo databases (chỉ cần chạy 1 lần đầu)
+make test-conn         # kiểm tra kết nối DB từ Python
+make etl               # chạy trực tiếp pipeline ETL chính
+make notebook          # mở Jupyter Lab phục vụ phân tích
+make shell             # vào môi trường ảo Python tương tác (gõ 'exit' để thoát)
+make psql              # mở shell psql bên trong container postgres
+make logs              # xem logs real-time của Docker
+make ps                # xem trạng thái hoạt động của các containers
+make requirements-check # kiểm tra các package cũ cần cập nhật
 ```
 
 Lưu ý về môi trường:

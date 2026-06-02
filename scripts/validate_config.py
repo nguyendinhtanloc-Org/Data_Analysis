@@ -28,8 +28,21 @@ def load_env_file():
 
 def check_required_env():
     """Kiểm tra các biến môi trường bắt buộc."""
-    
-    required = ["POSTGRES_PASSWORD"]
+
+    # Các biến này được dùng trong docker-compose.yml
+    required = [
+        "POSTGRES_USER",
+        "POSTGRES_PASSWORD",
+        "POSTGRES_DB",
+        "METABASE_DB_TYPE",
+        "METABASE_DB_DBNAME",
+        "METABASE_DB_PORT",
+        "METABASE_DB_USER",
+        "METABASE_DB_PASS",
+        "METABASE_DB_HOST",
+    ]
+
+
     missing = [var for var in required if not os.getenv(var)]
     
     if missing:
@@ -62,19 +75,32 @@ def check_password_strength():
 
 
 def check_port_available(port: int) -> bool:
-    """Kiểm tra xem cổng có sẵn để dùng không."""
-    
+    """Kiểm tra xem cổng có sẵn để dùng không.
+
+    socket.connect_ex trả về:
+    - 0: kết nối được => cổng đang BẬN
+    - khác 0: không kết nối được => cổng đang RỖNG
+
+    Hàm này trả về True khi cổng RỖNG.
+    """
+
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         result = sock.connect_ex(("localhost", port))
-        return result != 0
+        is_port_busy = result == 0
+        return not is_port_busy
     finally:
         sock.close()
 
 
+
 def validate_all():
     """Chạy toàn bộ kiểm tra."""
-    
+
+    # Nạp lại .env để đảm bảo chạy từ nơi khác vẫn có cấu hình.
+    # (load_env_file() ở main có thể không được gọi nếu module bị import.)
+    load_env_file()
+
     print("Kiểm tra cấu hình dự án...")
     
     checks = [

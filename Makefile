@@ -63,7 +63,11 @@ venv:
 	bash scripts/create_venv.sh
 
 shell:
-	bash -c 'source .venv/bin/activate && bash'
+	@echo "===================================================================="
+	@echo "ĐANG VÀO MÔI TRƯỜNG ẢO PYTHON (VIRTUALENV)"
+	@echo "Để THOÁT ra ngoài terminal thường, hãy gõ: exit"
+	@echo "===================================================================="
+	@bash -c 'source .venv/bin/activate && bash'
 
 init-db:
 	@set -a; \
@@ -77,7 +81,14 @@ test-conn:
 	if [ -f .env ]; then . ./.env; fi; \
 	set +a; \
 	export POSTGRES_HOST=localhost; \
-	python3 -m src.etl
+	.venv/bin/python -m src.etl
+
+etl:
+	@set -a; \
+	if [ -f .env ]; then . ./.env; fi; \
+	set +a; \
+	export POSTGRES_HOST=localhost; \
+	.venv/bin/python src/etl.py
 
 shell-postgres:
 	docker compose exec postgres bash
@@ -86,7 +97,7 @@ psql:
 	docker compose exec postgres psql -U "$${POSTGRES_USER:-postgres}" -d "$${POSTGRES_DB:-adventureworks}"
 
 notebook:
-	python3 -m jupyter lab --notebook-dir=notebooks
+	.venv/bin/python -m jupyter lab --notebook-dir=notebooks
 
 requirements-check:
 	bash -c 'source .venv/bin/activate && pip list --outdated'

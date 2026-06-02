@@ -19,7 +19,8 @@ services:
   metabase:
     # Metabase dùng để tạo dashboard và kiểm tra kết quả phân tích.
     # Pin version để đảm bảo reproducibility giữa các lần chạy.
-    image: metabase/metabase:v0.50.0
+    image: metabase/metabase:v0.50.1
+    platform: linux/amd64
     restart: unless-stopped
     environment:
       MB_DB_TYPE: ${METABASE_DB_TYPE}
