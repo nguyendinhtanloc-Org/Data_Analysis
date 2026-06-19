@@ -22,6 +22,7 @@ help:
 	@echo "  make psql      - open psql inside Postgres container"
 	@echo "  make notebook  - start Jupyter Lab"
 	@echo "  make requirements-check - check for outdated packages"
+	@echo "  make restore-db - restore AdventureWorks to MSSQL container"
 
 up:
 	docker compose up -d
@@ -88,7 +89,7 @@ etl:
 	if [ -f .env ]; then . ./.env; fi; \
 	set +a; \
 	export POSTGRES_HOST=localhost; \
-	.venv/bin/python src/etl.py
+	.venv/bin/python src/etl/etl.py
 
 shell-postgres:
 	docker compose exec postgres bash
@@ -101,3 +102,6 @@ notebook:
 
 requirements-check:
 	bash -c 'source .venv/bin/activate && pip list --outdated'
+
+restore-db:
+	bash scripts/restore_mssql.sh
