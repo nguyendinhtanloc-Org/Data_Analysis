@@ -19,7 +19,10 @@ Quy trình chuẩn chỉnh để bắt đầu dự án
 ```bash
 cp .env.example .env
 ```
-Mở file `.env` và thiết lập các tham số (có thể giữ nguyên mật khẩu `postgres` cho local dev). Đảm bảo `POSTGRES_HOST=localhost` để chạy code từ máy host được thông suốt.
+Mở file `.env` và thiết lập các tham số. 
+> [!IMPORTANT]
+> **Lưu ý đặc biệt cho SQL Server (MSSQL):**
+> Biến `MSSQL_PASSWORD` bắt buộc phải là một **mật khẩu mạnh** (tối thiểu 8 ký tự, bao gồm ít nhất: 1 chữ hoa, 1 chữ thường, 1 chữ số, và 1 ký tự đặc biệt, ví dụ: `Admin@123456`). Nếu đặt mật khẩu yếu, container MSSQL sẽ khởi động thất bại hoặc không cho phép kết nối.
 
 2. Khởi tạo môi trường ảo Python (Virtualenv):
 ```bash
@@ -31,18 +34,23 @@ make venv
 ```bash
 make validate
 ```
-Kiểm tra xem file `.env` đã đúng chưa và các cổng dịch vụ 5432, 3000 có bị ứng dụng khác chiếm dụng không.
+Kiểm tra xem file `.env` đã đúng chưa và các cổng dịch vụ 5432, 1433, 3000 có bị ứng dụng khác chiếm dụng không.
 
-4. Khởi chạy hạ tầng Docker (Postgres + Metabase):
+4. Khởi chạy hạ tầng Docker (Postgres + MSSQL + Metabase + ETL):
 ```bash
 make up
 ```
 
-5. Khởi tạo Database rỗng (AdventureWorks & Metabase):
-```bash
-make init-db
-```
-*Lưu ý:* Phải chạy bước này SAU khi đã bật hạ tầng ở bước 4 thành công.
+5. Khởi tạo Database rỗng trên Data Warehouse (PostgreSQL) và khôi phục cơ sở dữ liệu nguồn (MSSQL):
+*   Tạo database DW trống trên PostgreSQL:
+    ```bash
+    make init-db
+    ```
+*   Khôi phục database nguồn AdventureWorks2022 trên SQL Server từ file backup `.bak`:
+    ```bash
+    make restore-db
+    ```
+*Lưu ý:* Cả hai lệnh này cần được chạy sau khi hạ tầng Docker ở bước 4 đã khởi chạy thành công và đạt trạng thái Healthy.
 
 6. Kiểm tra kết nối tổng thể:
 ```bash
@@ -88,7 +96,8 @@ make restart           # khởi động lại các dịch vụ
 make down              # dừng hoàn toàn và gỡ bỏ các container
 make down-v            # dừng các dịch vụ và xoá toàn bộ volume dữ liệu
 make clean             # dọn dẹp sạch sẽ container và volumes
-make init-db           # tạo databases (chỉ cần chạy 1 lần đầu)
+make init-db           # tạo databases postgres (chỉ cần chạy 1 lần đầu)
+make restore-db        # khôi phục database AdventureWorks2022 trên MSSQL
 make test-conn         # kiểm tra kết nối DB từ Python
 make etl               # chạy trực tiếp pipeline ETL chính
 make notebook          # mở Jupyter Lab phục vụ phân tích
