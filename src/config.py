@@ -9,12 +9,8 @@ from urllib.parse import quote_plus
 
 
 @dataclass(frozen=True)
-class DatabaseSettings:
-    """Thông tin kết nối cơ sở dữ liệu.
-
-    Các giá trị không nhạy cảm có thể có giá trị mặc định để hỗ trợ local dev.
-    Mật khẩu là biến bắt buộc để tránh hardcode secret trong code.
-    """
+class PostgresSettings:
+    """Thông tin kết nối PostgreSQL (Data Warehouse)."""
 
     user: str
     password: str
@@ -23,12 +19,30 @@ class DatabaseSettings:
     name: str
 
     def connection_string(self) -> str:
-        """Trả về connection string tương thích SQLAlchemy."""
-
         safe_user = quote_plus(self.user)
         safe_password = quote_plus(self.password)
         return (
             f"postgresql+psycopg2://{safe_user}:{safe_password}"
+            f"@{self.host}:{self.port}/{self.name}"
+        )
+
+
+@dataclass(frozen=True)
+class MSSQLSettings:
+    """Thông tin kết nối Microsoft SQL Server (OLTP Source)."""
+
+    user: str
+    password: str
+    host: str
+    port: str
+    name: str
+
+    def connection_string(self) -> str:
+        safe_user = quote_plus(self.user)
+        safe_password = quote_plus(self.password)
+        # Yêu cầu pymssql. Cấu trúc URL: mssql+pymssql://<username>:<password>@<host>:<port>/<dbname>
+        return (
+            f"mssql+pymssql://{safe_user}:{safe_password}"
             f"@{self.host}:{self.port}/{self.name}"
         )
 
@@ -51,13 +65,25 @@ def get_required_env(name: str) -> str:
     return value
 
 
-def load_database_settings() -> DatabaseSettings:
-    """Tạo cấu hình DB từ biến môi trường."""
+def load_postgres_settings() -> PostgresSettings:
+    """Tạo cấu hình DB PostgreSQL từ biến môi trường."""
 
-    return DatabaseSettings(
+    return PostgresSettings(
         user=get_env("POSTGRES_USER", "postgres"),
         password=get_required_env("POSTGRES_PASSWORD"),
         host=get_env("POSTGRES_HOST", "localhost"),
         port=get_env("POSTGRES_PORT", "5432"),
         name=get_env("POSTGRES_DB", "adventureworks"),
+    )
+
+
+def load_mssql_settings() -> MSSQLSettings:
+    """Tạo cấu hình DB MSSQL từ biến môi trường."""
+
+    return MSSQLSettings(
+        user=get_env("MSSQL_USER", "sa"),
+        password=get_required_env("MSSQL_PASSWORD"),
+        host=get_env("MSSQL_HOST", "localhost"),
+        port=get_env("MSSQL_PORT", "1433"),
+        name=get_env("MSSQL_DB", "AdventureWorks2022"),
     )

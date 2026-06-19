@@ -5,13 +5,13 @@ riêng sang `src/config.py` để các bước ETL sau này có thể tái sử 
 """
 from sqlalchemy import create_engine, text
 
-from src.config import load_database_settings
+from src.config import load_postgres_settings
 
 
 def create_db_engine():
-    """Tạo SQLAlchemy engine từ cấu hình chung của dự án."""
+    """Tạo SQLAlchemy engine kết nối với Data Warehouse (PostgreSQL)."""
 
-    settings = load_database_settings()
+    settings = load_postgres_settings()
     return create_engine(settings.connection_string())
 
 
