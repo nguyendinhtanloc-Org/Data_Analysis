@@ -82,7 +82,7 @@ test-conn:
 	if [ -f .env ]; then . ./.env; fi; \
 	set +a; \
 	export POSTGRES_HOST=localhost; \
-	.venv/bin/python -m src.etl
+	.venv/bin/python src/etl/etl.py --test
 
 etl:
 	@set -a; \
