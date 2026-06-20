@@ -74,6 +74,11 @@ services:
     env_file:
       - .env
 
+    # Override hostname để dùng Docker internal network thay vì localhost
+    environment:
+      MSSQL_HOST: mssql
+      POSTGRES_HOST: postgres
+
     volumes:
       - ./:/app
 
