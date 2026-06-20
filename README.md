@@ -56,7 +56,7 @@ make up
 ```bash
 make test-conn
 ```
-Nếu màn hình in ra `Test connection: 1` tức là mọi thứ đã thông suốt!
+Nếu màn hình báo kết quả thành công cho cả PostgreSQL và MSSQL (như `✓ Cả hai kết nối đều thành công.`) tức là mọi thứ đã thông suốt!
 
 ---
 
