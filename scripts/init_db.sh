@@ -36,4 +36,11 @@ else
   psql -h "$HOST" -p "$PORT" -U "$USER" -v ON_ERROR_STOP=1 -c "CREATE DATABASE \"$METADB\";"
 fi
 
+echo "Khởi tạo schema và các bảng DWH từ sql/ddl_script.sql..."
+if [ -f sql/ddl_script.sql ]; then
+  psql -h "$HOST" -p "$PORT" -U "$USER" -d "$DB" -f sql/ddl_script.sql
+else
+  echo "Cảnh báo: Không tìm thấy sql/ddl_script.sql"
+fi
+
 echo "Hoàn tất kiểm tra/khởi tạo database."
