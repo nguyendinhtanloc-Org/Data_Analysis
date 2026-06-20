@@ -1,0 +1,128 @@
+services:
+  postgres:
+    # PostgreSQL dùng làm Data Warehouse và metadata database cho Metabase.
+    image: postgres:15
+    container_name: postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+
+    ports:
+      - "5432:5432"
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    networks:
+      - warehouse_net
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  mssql:
+    # SQL Server chứa cơ sở dữ liệu AdventureWorks dùng làm nguồn ETL.
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    platform: linux/amd64
+    container_name: mssql
+    restart: unless-stopped
+
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: "Developer"
+      MSSQL_SA_PASSWORD: ${MSSQL_PASSWORD}
+
+    ports:
+      - "1433:1433"
+
+    volumes:
+      - mssql_data:/var/opt/mssql
+      - ./data/raw:/var/opt/mssql/backup
+
+    networks:
+      - warehouse_net
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P ${MSSQL_PASSWORD} -C -Q 'SELECT 1' || exit 1"
+        ]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  etl:
+    # Container thực hiện quá trình Extract, Transform và Load dữ liệu.
+    build:
+      context: .
+
+    container_name: etl
+    restart: unless-stopped
+
+    env_file:
+      - .env
+
+    # Override hostname để dùng Docker internal network thay vì localhost
+    environment:
+      MSSQL_HOST: mssql
+      POSTGRES_HOST: postgres
+
+    volumes:
+      - ./:/app
+
+    working_dir: /app
+
+    networks:
+      - warehouse_net
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mssql:
+        condition: service_healthy
+
+    command: tail -f /dev/null
+
+  metabase:
+    # Metabase dùng để trực quan hóa dữ liệu và xây dựng dashboard.
+    image: metabase/metabase:v0.50.1
+    platform: linux/amd64
+    container_name: metabase
+    restart: unless-stopped
+
+    environment:
+      MB_DB_TYPE: ${METABASE_DB_TYPE}
+      MB_DB_DBNAME: ${METABASE_DB_DBNAME}
+      MB_DB_PORT: ${METABASE_DB_PORT}
+      MB_DB_USER: ${METABASE_DB_USER}
+      MB_DB_PASS: ${METABASE_DB_PASS}
+      MB_DB_HOST: ${METABASE_DB_HOST}
+
+    ports:
+      - "3000:3000"
+
+    networks:
+      - warehouse_net
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  mssql_data:
+
+networks:
+  warehouse_net:
