@@ -1,4 +1,4 @@
-.PHONY: help validate up start stop restart down down-v build rebuild clean logs ps venv shell init-db test-conn shell-postgres psql notebook requirements-check
+.PHONY: help validate up start stop restart down down-v build rebuild clean logs ps venv shell init-db test-conn shell-postgres psql notebook requirements-check ml-clustering ml-anomaly ml-decision ml
 
 help:
 	@echo "Targets:"
@@ -23,6 +23,10 @@ help:
 	@echo "  make notebook  - start Jupyter Lab"
 	@echo "  make requirements-check - check for outdated packages"
 	@echo "  make restore-db - restore AdventureWorks to MSSQL container"
+	@echo "  make ml-clustering - run customer segmentation model"
+	@echo "  make ml-anomaly    - run inventory anomaly model"
+	@echo "  make ml-decision   - generate decision support recommendations"
+	@echo "  make ml            - run all ML modules in order"
 
 up:
 	docker compose up -d
@@ -105,3 +109,14 @@ requirements-check:
 
 restore-db:
 	bash scripts/restore_mssql.sh
+
+ml-clustering:
+	docker compose exec etl python src/ml/clustering.py
+
+ml-anomaly:
+	docker compose exec etl python src/ml/anomaly.py
+
+ml-decision:
+	docker compose exec etl python src/ml/decision_support.py
+
+ml: ml-clustering ml-anomaly ml-decision

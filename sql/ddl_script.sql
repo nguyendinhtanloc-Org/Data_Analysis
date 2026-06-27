@@ -90,3 +90,53 @@ CREATE TABLE IF NOT EXISTS dw.fact_inventory (
     scrapped_qty INT,
     _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 8. ML Customer Segments (K-Means on RFM)
+CREATE TABLE IF NOT EXISTS dw.ml_customer_segments (
+    customer_key INT NOT NULL,
+    full_name VARCHAR(200),
+    recency_days INT NOT NULL,
+    frequency INT NOT NULL,
+    monetary NUMERIC(15,2) NOT NULL,
+    cluster_id INT NOT NULL,
+    cluster_label VARCHAR(50) NOT NULL,
+    silhouette_score NUMERIC(10,6),
+    _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 9. ML Customer Clustering Metrics
+CREATE TABLE IF NOT EXISTS dw.ml_customer_clustering_metrics (
+    k INT NOT NULL,
+    silhouette_score NUMERIC(10,6),
+    inertia NUMERIC(20,6),
+    _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 10. ML Inventory Anomaly Detection
+CREATE TABLE IF NOT EXISTS dw.ml_inventory_anomaly (
+    product_key INT NOT NULL,
+    product_name VARCHAR(100),
+    category VARCHAR(100),
+    subcategory VARCHAR(100),
+    avg_quantity NUMERIC(15,2),
+    std_quantity NUMERIC(15,2),
+    max_quantity NUMERIC(15,2),
+    inventory_value NUMERIC(15,2),
+    units_sold NUMERIC(15,2),
+    days_inventory_outstanding NUMERIC(15,2),
+    anomaly_flag BOOLEAN NOT NULL,
+    anomaly_score NUMERIC(12,6),
+    _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- 11. Decision Support Recommendations
+CREATE TABLE IF NOT EXISTS dw.decision_support (
+    entity_type VARCHAR(50) NOT NULL,
+    entity_key INT NOT NULL,
+    signal_type VARCHAR(100) NOT NULL,
+    priority VARCHAR(20) NOT NULL,
+    recommended_action TEXT NOT NULL,
+    reason TEXT,
+    _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
