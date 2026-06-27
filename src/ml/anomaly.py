@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 from datetime import datetime
 
 import numpy as np
@@ -19,6 +20,13 @@ except ImportError:
     pass
 
 from src.config import load_postgres_settings
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 INVENTORY_QUERY = """
@@ -78,7 +86,7 @@ def get_engine():
 def run_inventory_anomaly_detection():
     engine = get_engine()
 
-    print("Reading inventory data from DWH...")
+    logger.info("Reading inventory data from DWH...")
     df = pd.read_sql(text(INVENTORY_QUERY), engine)
 
     if df.empty:
@@ -156,18 +164,20 @@ def run_inventory_anomaly_detection():
         ]
     ].copy()
 
-    print("Writing dw.ml_inventory_anomaly...")
+    logger.info("Writing dw.ml_inventory_anomaly...")
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE dw.ml_inventory_anomaly"))
+
     output.to_sql(
         "ml_inventory_anomaly",
         engine,
         schema="dw",
-        if_exists="replace",
+        if_exists="append",
         index=False,
-        chunksize=10000,
     )
 
-    print(f"Done. Wrote {len(output):,} inventory anomaly rows.")
-    print(f"Anomalies detected: {int(output['anomaly_flag'].sum())}")
+    logger.info("Done. Wrote %s inventory anomaly rows.", f"{len(output):,}")
+    logger.info("Anomalies detected: %s", int(output["anomaly_flag"].sum()))
 
 
 if __name__ == "__main__":

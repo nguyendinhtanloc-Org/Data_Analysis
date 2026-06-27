@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 from datetime import datetime
 
 import pandas as pd
@@ -16,6 +17,13 @@ except ImportError:
     pass
 
 from src.config import load_postgres_settings
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 def get_engine():
@@ -55,7 +63,7 @@ def inventory_priority(row):
 def run_decision_support():
     engine = get_engine()
 
-    print("Reading ML outputs...")
+    logger.info("Reading ML outputs...")
     customers = pd.read_sql(
         text("SELECT * FROM dw.ml_customer_segments"),
         engine,
@@ -124,19 +132,21 @@ def run_decision_support():
             ]
         )
 
-    print("Writing dw.decision_support...")
+    logger.info("Writing dw.decision_support...")
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE dw.decision_support"))
+
     output.to_sql(
         "decision_support",
         engine,
         schema="dw",
-        if_exists="replace",
+        if_exists="append",
         index=False,
-        chunksize=10000,
     )
 
-    print(f"Done. Wrote {len(output):,} decision support rows.")
+    logger.info("Done. Wrote %s decision support rows.", f"{len(output):,}")
     if not output.empty:
-        print(output["priority"].value_counts())
+        logger.info("Priority distribution:\n%s", output["priority"].value_counts())
 
 
 if __name__ == "__main__":

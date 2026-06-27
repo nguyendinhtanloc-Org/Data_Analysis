@@ -1,5 +1,6 @@
 import os
 import sys
+import logging
 from datetime import datetime
 
 import pandas as pd
@@ -19,6 +20,13 @@ except ImportError:
     pass
 
 from src.config import load_postgres_settings
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
 
 
 RFM_QUERY = """
@@ -115,7 +123,7 @@ def assign_cluster_labels(df):
 def run_customer_clustering():
     engine = get_engine()
 
-    print("Reading RFM data from DWH...")
+    logger.info("Reading RFM data from DWH...")
     df = pd.read_sql(text(RFM_QUERY), engine)
 
     if df.empty:
@@ -138,7 +146,7 @@ def run_customer_clustering():
     x = scaler.fit_transform(features)
 
     best_k, score_df = choose_best_k(x)
-    print(f"Best K selected: {best_k}")
+    logger.info("Best K selected: %s", best_k)
 
     model = KMeans(n_clusters=best_k, random_state=42, n_init=10)
     df_model["cluster_id"] = model.fit_predict(x)
@@ -162,28 +170,32 @@ def run_customer_clustering():
         ]
     ].copy()
 
-    print("Writing dw.ml_customer_segments...")
+    with engine.begin() as conn:
+        conn.execute(text("TRUNCATE TABLE dw.ml_customer_segments"))
+
     output.to_sql(
         "ml_customer_segments",
         engine,
         schema="dw",
-        if_exists="replace",
+        if_exists="append",
         index=False,
         chunksize=10000,
     )
 
     if not score_df.empty:
-        score_df["_load_timestamp"] = datetime.now()
-        score_df.to_sql(
-            "ml_customer_clustering_metrics",
-            engine,
-            schema="dw",
-            if_exists="replace",
-            index=False,
-        )
+        with engine.begin() as conn:
+            conn.execute(text("TRUNCATE TABLE dw.ml_customer_clustering_metrics"))
 
-    print(f"Done. Wrote {len(output):,} customer segment rows.")
-    print(output["cluster_label"].value_counts())
+    score_df.to_sql(
+        "ml_customer_clustering_metrics",
+        engine,
+        schema="dw",
+        if_exists="append",
+        index=False,
+    )
+
+    logger.info("Done. Wrote %s customer segment rows.", f"{len(output):,}")
+    logger.info("Cluster distribution:\n%s", output["cluster_label"].value_counts())
 
 
 if __name__ == "__main__":
