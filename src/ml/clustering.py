@@ -1,25 +1,23 @@
-import os
-import sys
+import json
 import logging
 from datetime import datetime
+from pathlib import Path
 
+import numpy as np
 import pandas as pd
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from sklearn.preprocessing import StandardScaler
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
-
 from src.config import load_postgres_settings
+
+load_dotenv()
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+MODELS_DIR = PROJECT_ROOT / "models"
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 logging.basicConfig(
@@ -114,9 +112,6 @@ def assign_cluster_labels(df):
     for idx, cluster_id in enumerate(sorted_clusters):
         label_map[cluster_id] = label_pool[min(idx, len(label_pool) - 1)]
 
-    worst_recency_cluster = profile.sort_values("recency_days", ascending=False).iloc[0]["cluster_id"]
-    label_map[worst_recency_cluster] = "At-Risk"
-
     return df["cluster_id"].map(label_map)
 
 
@@ -150,6 +145,15 @@ def run_customer_clustering():
 
     model = KMeans(n_clusters=best_k, random_state=42, n_init=10)
     df_model["cluster_id"] = model.fit_predict(x)
+
+    # Save scaler and centroids for migration module (cross-period consistency)
+    scaler_params = {"mean_": scaler.mean_.tolist(), "scale_": scaler.scale_.tolist()}
+    with open(MODELS_DIR / "rfm_scaler.json", "w") as f:
+        json.dump(scaler_params, f)
+    centroids_path = MODELS_DIR / "rfm_centroids.npy"
+    np.save(centroids_path, model.cluster_centers_)
+    logger.info("Saved scaler params to models/rfm_scaler.json")
+    logger.info("Saved centroids to models/rfm_centroids.npy")
 
     final_silhouette = silhouette_score(x, df_model["cluster_id"]) if best_k > 1 else None
     df_model["silhouette_score"] = final_silhouette
