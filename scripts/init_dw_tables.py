@@ -1,13 +1,10 @@
 """Script khởi tạo schema và tables trong PostgreSQL DWH.
 
 Chạy: python scripts/init_dw_tables.py
+
+WARNING: Giữ đồng bộ với sql/ddl_script.sql.
+CI sẽ kiểm tra số lượng bảng giữa 2 file.
 """
-import sys
-import os
-
-# Thêm thư mục gốc vào path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -17,6 +14,7 @@ from sqlalchemy import create_engine, text
 DDL_SCRIPT = """
 CREATE SCHEMA IF NOT EXISTS dw;
 CREATE SCHEMA IF NOT EXISTS staging;
+CREATE SCHEMA IF NOT EXISTS mart;
 
 -- 1. Dim_Date
 CREATE TABLE IF NOT EXISTS dw.dim_date (
@@ -80,6 +78,7 @@ CREATE TABLE IF NOT EXISTS dw.dim_employee (
 -- 6. Fact_Sales
 CREATE TABLE IF NOT EXISTS dw.fact_sales (
     sales_order_detail_id INT PRIMARY KEY,
+    sales_order_id INT NOT NULL,
     date_key INT NOT NULL REFERENCES dw.dim_date(date_key),
     product_key INT NOT NULL REFERENCES dw.dim_product(product_key),
     customer_key INT NOT NULL REFERENCES dw.dim_customer(customer_key),
@@ -99,11 +98,12 @@ CREATE TABLE IF NOT EXISTS dw.fact_inventory (
     inventory_id SERIAL PRIMARY KEY,
     date_key INT NOT NULL REFERENCES dw.dim_date(date_key),
     product_key INT NOT NULL REFERENCES dw.dim_product(product_key),
+    location_id INT,
     quantity INT NOT NULL,
-    ordered_qty INT,
-    scrapped_qty INT,
     _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
+CREATE UNIQUE INDEX IF NOT EXISTS uq_fact_inventory
+    ON dw.fact_inventory(product_key, date_key, COALESCE(location_id, -1));
 
 -- Index tối ưu query cho Fact_Sales
 CREATE INDEX IF NOT EXISTS idx_fact_sales_date_key     ON dw.fact_sales(date_key);
@@ -127,6 +127,131 @@ CREATE INDEX IF NOT EXISTS idx_dim_territory_id ON dw.dim_territory(territory_id
 
 -- Index cho Dim_Employee lookup
 CREATE INDEX IF NOT EXISTS idx_dim_employee_id ON dw.dim_employee(employee_id);
+
+-- ===========================================================================
+-- MART SCHEMA: Snapshot Layer cho Time-series Analysis
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS mart.kpi_snapshot (
+    snapshot_id   SERIAL PRIMARY KEY,
+    kpi_name      VARCHAR(100) NOT NULL,
+    period_type   VARCHAR(10) NOT NULL,
+    period_key    VARCHAR(10) NOT NULL,
+    period_start  DATE NOT NULL,
+    period_end    DATE NOT NULL,
+    value         NUMERIC(18,4),
+    dimension     VARCHAR(50)  DEFAULT 'overall',
+    dimension_value VARCHAR(100) DEFAULT 'overall',
+    row_count     INT,
+    calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    etl_batch_id  VARCHAR(50),
+    UNIQUE (kpi_name, period_type, period_key, dimension, dimension_value)
+);
+
+CREATE TABLE IF NOT EXISTS mart.rfm_snapshot (
+    snapshot_id   SERIAL PRIMARY KEY,
+    period_key    VARCHAR(10) NOT NULL,
+    period_start  DATE NOT NULL,
+    period_end    DATE NOT NULL,
+    cluster_label VARCHAR(50) NOT NULL,
+    customer_count INT NOT NULL,
+    avg_recency   NUMERIC(10,2),
+    avg_frequency NUMERIC(10,2),
+    avg_monetary  NUMERIC(15,2),
+    total_monetary NUMERIC(15,2),
+    pct_of_total  NUMERIC(5,2),
+    calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (period_key, cluster_label)
+);
+
+CREATE TABLE IF NOT EXISTS mart.customer_migration (
+    migration_id    SERIAL PRIMARY KEY,
+    customer_key    INT NOT NULL,
+    prev_period_key VARCHAR(10) NOT NULL,
+    curr_period_key VARCHAR(10) NOT NULL,
+    prev_cluster    VARCHAR(50),
+    curr_cluster    VARCHAR(50),
+    prev_monetary   NUMERIC(15,2),
+    curr_monetary   NUMERIC(15,2),
+    is_churned      BOOLEAN DEFAULT FALSE,
+    is_new          BOOLEAN DEFAULT FALSE,
+    calculated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (customer_key, prev_period_key, curr_period_key)
+);
+
+CREATE TABLE IF NOT EXISTS mart.inventory_snapshot (
+    snapshot_id          SERIAL PRIMARY KEY,
+    period_key           VARCHAR(10) NOT NULL,
+    period_start         DATE NOT NULL,
+    period_end           DATE NOT NULL,
+    product_key          INT NOT NULL,
+    avg_quantity         NUMERIC(15,2),
+    avg_inventory_value  NUMERIC(15,2),
+    avg_dio              NUMERIC(10,2),
+    anomaly_count        INT DEFAULT 0,
+    anomaly_score_avg    NUMERIC(12,6),
+    calculated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (period_key, product_key)
+);
+
+CREATE TABLE IF NOT EXISTS mart.daily_sales_agg (
+    date_key INT PRIMARY KEY,
+    date DATE NOT NULL,
+    year INT NOT NULL,
+    quarter INT NOT NULL,
+    month INT NOT NULL,
+    order_count INT NOT NULL,
+    item_count INT NOT NULL,
+    total_qty INT NOT NULL,
+    revenue NUMERIC(18,2) NOT NULL,
+    gross_profit NUMERIC(18,2) NOT NULL,
+    customer_count INT NOT NULL,
+    _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS mart.period_comparison (
+    comparison_id    SERIAL PRIMARY KEY,
+    kpi_name         VARCHAR(100) NOT NULL,
+    curr_period_key  VARCHAR(10) NOT NULL,
+    prev_period_key  VARCHAR(10) NOT NULL,
+    dimension        VARCHAR(50) DEFAULT 'overall',
+    dimension_value  VARCHAR(100) DEFAULT 'overall',
+    curr_value       NUMERIC(18,4),
+    prev_value       NUMERIC(18,4),
+    abs_change       NUMERIC(18,4),
+    pct_change       NUMERIC(10,4),
+    contribution_pct NUMERIC(10,4),
+    is_significant   BOOLEAN,
+    p_value          NUMERIC(10,6),
+    effect_size      NUMERIC(10,4),
+    calculated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (kpi_name, curr_period_key, prev_period_key, dimension, dimension_value)
+);
+
+CREATE INDEX IF NOT EXISTS idx_kpi_snapshot_name_period ON mart.kpi_snapshot(kpi_name, period_key);
+CREATE INDEX IF NOT EXISTS idx_kpi_snapshot_period_type ON mart.kpi_snapshot(period_type, period_key);
+CREATE INDEX IF NOT EXISTS idx_rfm_snapshot_period ON mart.rfm_snapshot(period_key);
+CREATE INDEX IF NOT EXISTS idx_customer_migration_curr ON mart.customer_migration(curr_period_key);
+CREATE INDEX IF NOT EXISTS idx_customer_migration_key ON mart.customer_migration(customer_key);
+CREATE INDEX IF NOT EXISTS idx_inventory_snapshot_period ON mart.inventory_snapshot(period_key);
+CREATE INDEX IF NOT EXISTS idx_period_comparison_kpi ON mart.period_comparison(kpi_name, curr_period_key);
+
+CREATE TABLE IF NOT EXISTS dw.ml_inventory_anomaly (
+    product_key INT NOT NULL,
+    product_name VARCHAR(100),
+    category VARCHAR(100),
+    subcategory VARCHAR(100),
+    avg_quantity NUMERIC(15,2),
+    std_quantity NUMERIC(15,2),
+    max_quantity NUMERIC(15,2),
+    inventory_value NUMERIC(15,2),
+    units_sold NUMERIC(15,2),
+    days_inventory_outstanding NUMERIC(15,2),
+    anomaly_flag BOOLEAN NOT NULL,
+    anomaly_score NUMERIC(12,6),
+    zero_sales_flag BOOLEAN NOT NULL DEFAULT FALSE,
+    _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 
