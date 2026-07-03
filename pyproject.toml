@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "adventureworks-dw"
+version = "2.0.0"
+description = "Data Warehouse & Business Analytics with Integrated Machine Learning"
+requires-python = ">=3.11"
+dependencies = [
+    "pandas==2.2.3",
+    "numpy==1.26.4",
+    "sqlalchemy==2.0.36",
+    "psycopg2-binary==2.9.10",
+    "pymssql==2.3.2",
+    "python-dotenv==1.0.1",
+    "scikit-learn==1.6.0",
+    "statsmodels==0.14.4",
+    "scipy==1.14.1",
+]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
