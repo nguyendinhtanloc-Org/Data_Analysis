@@ -39,6 +39,7 @@ from src.analytics.insight_generator import (
     _kpi_label,
     _fmt_value,
 )
+from src.analytics.causal import price_elasticity
 from src.analytics.hypothesis_tester import (
     two_sample_ttest,
     chi_square_cluster_test,

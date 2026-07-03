@@ -172,8 +172,8 @@ def build_migration_matrix(
     merged["curr_cluster"] = merged["cluster_label_curr"].fillna("Churned")
     merged["prev_monetary"] = merged["monetary_prev"]
     merged["curr_monetary"] = merged["monetary_curr"]
-    merged["is_churned"] = merged["_merge"] == "left_only"
-    merged["is_new"] = merged["_merge"] == "right_only"
+    merged["is_churned"] = merged["_merge"] == "right_only"
+    merged["is_new"] = merged["_merge"] == "left_only"
     merged["calculated_at"] = datetime.now()
 
     cols = [

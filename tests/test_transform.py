@@ -95,6 +95,7 @@ def test_transform_fact_sales_lookup():
 
     # Sale in 2011 — should match product_key=10 (Old Price, standard_cost=50)
     df_raw = pd.DataFrame({
+        "SalesOrderID": [1000],
         "SalesOrderDetailID": [1001],
         "OrderDate": ["2011-06-01"],
         "ProductID": [1],

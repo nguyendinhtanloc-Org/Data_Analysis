@@ -10,7 +10,7 @@ def test_churn_no_prior_data():
         0.0 * weight_freq +
         0.0 * weight_mon
     )
-    assert risk == 0.0
+    assert risk == 0.0  # 0 * anything = 0, exact
 
 
 def test_churn_full_risk():
@@ -28,7 +28,7 @@ def test_churn_full_risk():
         freq_score * weight_freq +
         mon_score * weight_mon
     )
-    assert risk == 1.0
+    assert abs(risk - 1.0) < 1e-10
 
 
 def test_churn_partial_risk():
@@ -46,8 +46,8 @@ def test_churn_partial_risk():
         freq_score * weight_freq +
         mon_score * weight_mon
     )
-    assert risk == 0.3
+    assert abs(risk - 0.3) < 1e-10
 
 
 def test_churn_weights_sum_to_one():
-    assert 0.3 + 0.35 + 0.35 == 1.0
+    assert abs(0.3 + 0.35 + 0.35 - 1.0) < 1e-10

@@ -53,7 +53,7 @@ def deduplicate_by_modified(df: pd.DataFrame, natural_key: str | list[str]) -> p
         natural_key = [natural_key]
     # Chuẩn hóa tên cột tham chiếu sang lowercase
     key_cols_lower = [k.lower() for k in natural_key]
-    mod_col = next((c for c in df.columns if "modifieddate" in c.lower()), None)
+    mod_col = next((c for c in df.columns if "modified" in c.lower() and "date" in c.lower()), None)
     if mod_col:
         df = df.sort_values(mod_col, ascending=False)
     df = df.drop_duplicates(subset=key_cols_lower, keep="first")
@@ -409,8 +409,11 @@ def transform_fact_sales(
         "unitprice": "unit_price",
         "unitpricediscount": "unit_price_discount",
         "linetotal": "line_total",
-        "standardcost": "standard_cost",
     })
+    # standard_cost was already mapped from SCD2 historical lookup above;
+    # drop the original standardcost column to avoid duplicate column names
+    if "standardcost" in df.columns:
+        df = df.drop(columns=["standardcost"])
 
     cols = [
         "sales_order_detail_id", "sales_order_id", "date_key",
