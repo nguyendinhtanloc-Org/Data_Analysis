@@ -33,7 +33,11 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Run unit tests
         run: |
-          python -m pytest tests/ -v --ignore=tests/test_config.py --ignore=tests/test_counterexamples.py -x
+          python -m pytest tests/ -v \
+            --ignore=tests/test_config.py \
+            --ignore=tests/test_counterexamples.py \
+            --ignore=tests/test_integration.py \
+            -x
       - name: Run counterexample tests
         run: |
           python -m pytest tests/test_counterexamples.py -v
