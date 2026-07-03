@@ -129,6 +129,39 @@ CREATE INDEX IF NOT EXISTS idx_dim_territory_id ON dw.dim_territory(territory_id
 CREATE INDEX IF NOT EXISTS idx_dim_employee_id ON dw.dim_employee(employee_id);
 
 -- ===========================================================================
+-- ML TABLES: Machine Learning Output
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS dw.ml_customer_segments (
+    customer_key INT NOT NULL,
+    full_name VARCHAR(200),
+    recency_days INT NOT NULL,
+    frequency INT NOT NULL,
+    monetary NUMERIC(15,2) NOT NULL,
+    cluster_id INT NOT NULL,
+    cluster_label VARCHAR(50) NOT NULL,
+    silhouette_score NUMERIC(10,6),
+    _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS dw.ml_customer_clustering_metrics (
+    k INT NOT NULL,
+    silhouette_score NUMERIC(10,6),
+    inertia NUMERIC(20,6),
+    _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS dw.decision_support (
+    entity_type VARCHAR(50) NOT NULL,
+    entity_key INT NOT NULL,
+    signal_type VARCHAR(100) NOT NULL,
+    priority VARCHAR(20) NOT NULL,
+    recommended_action TEXT NOT NULL,
+    reason TEXT,
+    _load_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ===========================================================================
 -- MART SCHEMA: Snapshot Layer cho Time-series Analysis
 -- ===========================================================================
 

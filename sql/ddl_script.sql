@@ -217,7 +217,23 @@ CREATE TABLE IF NOT EXISTS mart.period_comparison (
     UNIQUE (kpi_name, curr_period_key, prev_period_key, dimension, dimension_value)
 );
 
--- Daily aggregated sales table (KPI performance — refresh from pipeline)
+-- 16. Mart Inventory Snapshot: Inventory metrics theo từng kỳ
+CREATE TABLE IF NOT EXISTS mart.inventory_snapshot (
+    snapshot_id          SERIAL PRIMARY KEY,
+    period_key           VARCHAR(10) NOT NULL,
+    period_start         DATE NOT NULL,
+    period_end           DATE NOT NULL,
+    product_key          INT NOT NULL,
+    avg_quantity         NUMERIC(15,2),
+    avg_inventory_value  NUMERIC(15,2),
+    avg_dio              NUMERIC(10,2),
+    anomaly_count        INT DEFAULT 0,
+    anomaly_score_avg    NUMERIC(12,6),
+    calculated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (period_key, product_key)
+);
+
+-- 17. Daily aggregated sales table (KPI performance — refresh from pipeline)
 CREATE TABLE IF NOT EXISTS mart.daily_sales_agg (
     date_key INT PRIMARY KEY,
     date DATE NOT NULL,
