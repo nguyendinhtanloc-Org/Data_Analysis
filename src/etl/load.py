@@ -30,68 +30,6 @@ def create_postgres_engine() -> Engine:
 
 
 # ---------------------------------------------------------------------------
-# Staging load (backward compat)
-# ---------------------------------------------------------------------------
-
-def load_to_staging(
-    df: pd.DataFrame,
-    table_name: str,
-    schema: str = "staging",
-    if_exists: str = "replace",
-) -> None:
-    """
-    Load DataFrame vào một bảng staging trong Data Warehouse.
-
-    Args:
-        df: Dữ liệu cần load.
-        table_name: Tên bảng đích.
-        schema: Tên schema đích (mặc định là 'staging').
-        if_exists: Hành vi khi bảng đã tồn tại ('fail', 'replace', 'append').
-    """
-    engine = create_postgres_engine()
-    with engine.connect() as conn:
-        df.to_sql(
-            name=table_name,
-            con=conn,
-            schema=schema,
-            if_exists=if_exists,
-            index=False,
-            chunksize=10000,
-        )
-        conn.commit()
-        logger.info(f"Đã load {len(df):,} dòng vào {schema}.{table_name}")
-
-
-def load_to_warehouse(
-    df: pd.DataFrame,
-    table_name: str,
-    schema: str = "public",
-    if_exists: str = "append",
-) -> None:
-    """
-    Load DataFrame vào một bảng trong Data Warehouse chính (Fact/Dim tables).
-
-    Args:
-        df: Dữ liệu cần load.
-        table_name: Tên bảng đích.
-        schema: Tên schema đích (mặc định là 'public').
-        if_exists: Hành vi khi bảng đã tồn tại ('fail', 'replace', 'append').
-    """
-    engine = create_postgres_engine()
-    with engine.connect() as conn:
-        df.to_sql(
-            name=table_name,
-            con=conn,
-            schema=schema,
-            if_exists=if_exists,
-            index=False,
-            chunksize=10000,
-        )
-        conn.commit()
-        logger.info(f"Đã load {len(df):,} dòng vào {schema}.{table_name}")
-
-
-# ---------------------------------------------------------------------------
 # Helpers nội bộ
 # ---------------------------------------------------------------------------
 
@@ -110,47 +48,61 @@ def _upsert_dim_scd1(
     Returns:
         pd.DataFrame: Dim table hiện tại trong DWH sau khi upsert (có surrogate key).
     """
-    # Lấy dữ liệu hiện tại từ DWH
     existing_df = pd.read_sql(
         text(f'SELECT * FROM {schema}."{table}"'),
         conn,
     )
 
     now = datetime.now()
-    inserted = 0
-    updated = 0
+    BATCH = 1000
+
+    # Merge logic: split incoming rows into insert vs update
+    existing_bk = set(existing_df[business_key].values)
+    insert_rows = []
+    update_rows = []
 
     for _, row in df.iterrows():
         bk_val = row[business_key]
-        existing_row = existing_df[existing_df[business_key] == bk_val]
+        if bk_val in existing_bk:
+            update_rows.append(row)
+        else:
+            insert_rows.append(row)
 
-        if existing_row.empty:
-            # INSERT
-            insert_data = {c: row[c] for c in update_cols + [business_key] if c in row.index}
-            insert_data["_load_timestamp"] = now
-            cols = ", ".join(f'"{k}"' for k in insert_data.keys())
-            placeholders = ", ".join(f":{k}" for k in insert_data.keys())
+    # Batch INSERT
+    if insert_rows:
+        insert_batch = []
+        for row in insert_rows:
+            d = {c: row[c] for c in update_cols + [business_key] if c in row.index}
+            d["_load_timestamp"] = now
+            insert_batch.append(d)
+        for i in range(0, len(insert_batch), BATCH):
+            batch = insert_batch[i:i + BATCH]
+            cols = ", ".join(f'"{k}"' for k in batch[0].keys())
+            placeholders = ", ".join(f":{k}" for k in batch[0].keys())
             conn.execute(
                 text(f'INSERT INTO {schema}."{table}" ({cols}) VALUES ({placeholders})'),
-                insert_data,
+                batch,
             )
-            inserted += 1
-        else:
-            # UPDATE
-            sk_val = existing_row.iloc[0][surrogate_key]
-            update_data = {c: row[c] for c in update_cols if c in row.index}
-            update_data["_load_timestamp"] = now
-            set_clause = ", ".join(f'"{k}" = :{k}' for k in update_data.keys())
-            update_data[surrogate_key] = int(sk_val)
+
+    # Batch UPDATE
+    if update_rows:
+        update_batch = []
+        sk_values = existing_df.set_index(business_key)[surrogate_key].to_dict()
+        for row in update_rows:
+            bk_val = row[business_key]
+            d = {c: row[c] for c in update_cols if c in row.index}
+            d["_load_timestamp"] = now
+            d[surrogate_key] = int(sk_values.get(bk_val, 0))
+            update_batch.append(d)
+        for i in range(0, len(update_batch), BATCH):
+            batch = update_batch[i:i + BATCH]
+            set_clause = ", ".join(f'"{k}" = :{k}' for k in update_cols + ["_load_timestamp"])
             conn.execute(
                 text(f'UPDATE {schema}."{table}" SET {set_clause} WHERE "{surrogate_key}" = :{surrogate_key}'),
-                update_data,
+                batch,
             )
-            updated += 1
 
-    logger.info(f"  {schema}.{table} SCD1: {inserted} inserted, {updated} updated")
-
-    # Trả về bảng dim với surrogate key
+    logger.info(f"  {schema}.{table} SCD1: {len(insert_rows)} inserted, {len(update_rows)} updated")
     return pd.read_sql(text(f'SELECT * FROM {schema}."{table}"'), conn)
 
 
@@ -175,309 +127,349 @@ def _load_dim_scd2(
         text(f'SELECT * FROM {schema}."{table}"'),
         conn,
     )
+
+    # Build lookup: business_key → current row
+    current_map = {}
+    for _, r in existing_df.iterrows():
+        if r["is_current"]:
+            current_map[r[business_key]] = r
+
     now = datetime.now()
+    BATCH = 1000
+    close_batch = []
+    insert_batch = []
     inserted = 0
     closed = 0
 
     for _, row in df.iterrows():
         bk_val = row[business_key]
-        current_rows = existing_df[
-            (existing_df[business_key] == bk_val) & (existing_df["is_current"] == True)
-        ]
+        curr = current_map.get(bk_val)
 
-        if current_rows.empty:
-            # INSERT mới
-            _insert_scd2_row(conn, schema, table, row, now)
+        if curr is None:
+            insert_batch.append((row, now))
             inserted += 1
         else:
-            curr = current_rows.iloc[0]
-            # Kiểm tra thay đổi
             changed = any(
                 str(row[col]) != str(curr[col])
                 for col in track_cols
                 if col in row.index and col in curr.index
             )
             if changed:
-                # Close bản cũ
-                sk_val = int(curr["product_key"])
-                conn.execute(
-                    text(
-                        f'UPDATE {schema}."{table}" SET valid_to = :vt, is_current = false '
-                        f'WHERE product_key = :pk'
-                    ),
-                    {"vt": now, "pk": sk_val},
-                )
-                closed += 1
-                # Insert bản mới
-                _insert_scd2_row(conn, schema, table, row, now)
+                close_batch.append(int(curr["product_key"]))
+                insert_batch.append((row, now))
                 inserted += 1
+                closed += 1
+
+    # Batch close old records
+    if close_batch:
+        for i in range(0, len(close_batch), BATCH):
+            batch = close_batch[i:i + BATCH]
+            conn.execute(
+                text(f'UPDATE {schema}."{table}" SET valid_to = :vt, is_current = false '
+                     f'WHERE product_key = ANY(:pks)'),
+                {"vt": now, "pks": batch},
+            )
+
+    # Batch insert new records
+    if insert_batch:
+        insert_rows = []
+        for row, ts in insert_batch:
+            d = {
+                "product_id": int(row["product_id"]),
+                "name": str(row["name"])[:100],
+                "subcategory": str(row["subcategory"])[:100] if pd.notna(row.get("subcategory")) else None,
+                "category": str(row["category"])[:100] if pd.notna(row.get("category")) else None,
+                "list_price": float(row["list_price"]),
+                "standard_cost": float(row["standard_cost"]),
+                "valid_from": ts,
+                "valid_to": None,
+                "is_current": True,
+                "_load_timestamp": ts,
+            }
+            insert_rows.append(d)
+        for i in range(0, len(insert_rows), BATCH):
+            batch = insert_rows[i:i + BATCH]
+            conn.execute(
+                text("""
+                    INSERT INTO dw.dim_product
+                        (product_id, name, subcategory, category, list_price, standard_cost,
+                         valid_from, valid_to, is_current, _load_timestamp)
+                    VALUES
+                        (:product_id, :name, :subcategory, :category, :list_price, :standard_cost,
+                         :valid_from, :valid_to, :is_current, :_load_timestamp)
+                """),
+                batch,
+            )
 
     logger.info(f"  {schema}.{table} SCD2: {inserted} inserted, {closed} closed")
-
-    return pd.read_sql(text(f'SELECT * FROM {schema}."{table}" WHERE is_current = true'), conn)
-
-
-def _insert_scd2_row(
-    conn: Connection,
-    schema: str,
-    table: str,
-    row: pd.Series,
-    now: datetime,
-) -> None:
-    """Insert một bản ghi SCD Type 2 mới."""
-    data = {
-        "product_id": int(row["product_id"]),
-        "name": str(row["name"])[:100],
-        "subcategory": str(row["subcategory"])[:100] if pd.notna(row.get("subcategory")) else None,
-        "category": str(row["category"])[:100] if pd.notna(row.get("category")) else None,
-        "list_price": float(row["list_price"]),
-        "standard_cost": float(row["standard_cost"]),
-        "valid_from": now,
-        "valid_to": None,
-        "is_current": True,
-        "_load_timestamp": now,
-    }
-    conn.execute(
-        text("""
-            INSERT INTO dw.dim_product
-                (product_id, name, subcategory, category, list_price, standard_cost,
-                 valid_from, valid_to, is_current, _load_timestamp)
-            VALUES
-                (:product_id, :name, :subcategory, :category, :list_price, :standard_cost,
-                 :valid_from, :valid_to, :is_current, :_load_timestamp)
-        """),
-        data,
-    )
+    return pd.read_sql(text(f'SELECT * FROM {schema}."{table}"'), conn)
 
 
 # ---------------------------------------------------------------------------
 # Public load functions (dùng trong pipeline)
 # ---------------------------------------------------------------------------
 
-def load_dim_date(df: pd.DataFrame, engine: Engine) -> None:
-    """Load Dim_Date vào DWH. INSERT ON CONFLICT DO NOTHING (idempotent)."""
+def load_dim_date(df: pd.DataFrame, engine: Engine, conn: Connection = None) -> None:
+    """Load Dim_Date vào DWH. INSERT ON CONFLICT DO NOTHING (idempotent).
+    Luôn insert nếu date_key chưa tồn tại (không skip khi bảng đã có dữ liệu).
+
+    Args:
+        conn: Nếu được cung cấp, dùng connection này (cho single-transaction pipeline).
+              Nếu None, tự tạo transaction riêng.
+    """
     if df is None or len(df) == 0:
         return
-    with engine.connect() as conn:
-        for _, row in df.iterrows():
-            conn.execute(
+
+    def _do_load(c: Connection):
+        records = df.to_dict("records")
+        BATCH = 1000
+        for i in range(0, len(records), BATCH):
+            batch = records[i:i + BATCH]
+            c.execute(
                 text("""
                     INSERT INTO dw.dim_date (date_key, date, day, month, quarter, year, is_weekend)
                     VALUES (:date_key, :date, :day, :month, :quarter, :year, :is_weekend)
                     ON CONFLICT (date_key) DO NOTHING
                 """),
-                {
-                    "date_key": int(row["date_key"]),
-                    "date": row["date"],
-                    "day": int(row["day"]),
-                    "month": int(row["month"]),
-                    "quarter": int(row["quarter"]),
-                    "year": int(row["year"]),
-                    "is_weekend": bool(row["is_weekend"]),
-                },
+                batch,
             )
-        conn.commit()
-    logger.info(f"load_dim_date: {len(df):,} rows loaded")
+
+    if conn is not None:
+        _do_load(conn)
+    else:
+        with engine.begin() as c:
+            _do_load(c)
+    logger.info(f"load_dim_date: {len(df):,} rows processed")
 
 
-def load_dim_product(df: pd.DataFrame, engine: Engine) -> pd.DataFrame:
+def load_dim_product(df: pd.DataFrame, engine: Engine, conn: Connection = None) -> pd.DataFrame:
     """
     Load Dim_Product với SCD Type 2.
 
+    Args:
+        conn: Nếu được cung cấp, dùng connection này (single-transaction pipeline).
+
     Returns:
-        pd.DataFrame: Bản ghi current trong DWH sau khi load (dùng để lookup surrogate key).
+        pd.DataFrame: Tất cả bản ghi dim_product (cho surrogate key lookup với valid range).
     """
     if df is None or len(df) == 0:
         logger.info("load_dim_product: no data to load")
-        with engine.connect() as conn:
-            return pd.read_sql(
-                text("SELECT * FROM dw.dim_product WHERE is_current = true"), conn
-            )
+        db_conn = conn if conn is not None else engine.connect()
+        return pd.read_sql(text("SELECT * FROM dw.dim_product"), db_conn)
 
-    with engine.begin() as conn:
-        result = _load_dim_scd2(
-            conn=conn,
+    def _do_load(c: Connection):
+        return _load_dim_scd2(
+            conn=c,
             df=df,
             table="dim_product",
             schema="dw",
             business_key="product_id",
             track_cols=["name", "list_price", "standard_cost"],
         )
+
+    if conn is not None:
+        result = _do_load(conn)
+    else:
+        with engine.begin() as c:
+            result = _do_load(c)
+
     logger.info(f"load_dim_product: {len(df):,} records processed")
     return result
 
 
-def load_dim_territory(df: pd.DataFrame, engine: Engine) -> pd.DataFrame:
-    """
-    Load Dim_Territory với SCD Type 1.
-
-    Returns:
-        pd.DataFrame: Toàn bộ dim sau khi load.
-    """
+def load_dim_territory(df: pd.DataFrame, engine: Engine, conn: Connection = None) -> pd.DataFrame:
     if df is None or len(df) == 0:
         logger.info("load_dim_territory: no data to load")
-        with engine.connect() as conn:
-            return pd.read_sql(text("SELECT * FROM dw.dim_territory"), conn)
+        db_conn = conn if conn is not None else engine.connect()
+        return pd.read_sql(text("SELECT * FROM dw.dim_territory"), db_conn)
 
-    with engine.begin() as conn:
-        result = _upsert_dim_scd1(
-            conn=conn,
-            df=df,
-            table="dim_territory",
-            schema="dw",
-            business_key="territory_id",
-            surrogate_key="territory_key",
+    def _do_load(c: Connection):
+        return _upsert_dim_scd1(
+            conn=c, df=df, table="dim_territory", schema="dw",
+            business_key="territory_id", surrogate_key="territory_key",
             update_cols=["territory_name", "country_region", "group_name"],
         )
+
+    if conn is not None:
+        result = _do_load(conn)
+    else:
+        with engine.begin() as c:
+            result = _do_load(c)
     logger.info(f"load_dim_territory: {len(df):,} records processed")
     return result
 
 
-def load_dim_employee(df: pd.DataFrame, engine: Engine) -> pd.DataFrame:
-    """
-    Load Dim_Employee với SCD Type 1.
-
-    Returns:
-        pd.DataFrame: Toàn bộ dim sau khi load.
-    """
+def load_dim_employee(df: pd.DataFrame, engine: Engine, conn: Connection = None) -> pd.DataFrame:
     if df is None or len(df) == 0:
         logger.info("load_dim_employee: no data to load")
-        with engine.connect() as conn:
-            return pd.read_sql(text("SELECT * FROM dw.dim_employee"), conn)
+        db_conn = conn if conn is not None else engine.connect()
+        return pd.read_sql(text("SELECT * FROM dw.dim_employee"), db_conn)
 
-    with engine.begin() as conn:
-        result = _upsert_dim_scd1(
-            conn=conn,
-            df=df,
-            table="dim_employee",
-            schema="dw",
-            business_key="employee_id",
-            surrogate_key="employee_key",
+    def _do_load(c: Connection):
+        return _upsert_dim_scd1(
+            conn=c, df=df, table="dim_employee", schema="dw",
+            business_key="employee_id", surrogate_key="employee_key",
             update_cols=["full_name", "job_title", "department", "hire_date"],
         )
+
+    if conn is not None:
+        result = _do_load(conn)
+    else:
+        with engine.begin() as c:
+            result = _do_load(c)
     logger.info(f"load_dim_employee: {len(df):,} records processed")
     return result
 
 
-def load_dim_customer(df: pd.DataFrame, engine: Engine) -> pd.DataFrame:
-    """
-    Load Dim_Customer với SCD Type 1.
-
-    Returns:
-        pd.DataFrame: Toàn bộ dim sau khi load.
-    """
+def load_dim_customer(df: pd.DataFrame, engine: Engine, conn: Connection = None) -> pd.DataFrame:
     if df is None or len(df) == 0:
         logger.info("load_dim_customer: no data to load")
-        with engine.connect() as conn:
-            return pd.read_sql(text("SELECT * FROM dw.dim_customer"), conn)
+        db_conn = conn if conn is not None else engine.connect()
+        return pd.read_sql(text("SELECT * FROM dw.dim_customer"), db_conn)
 
-    with engine.begin() as conn:
-        result = _upsert_dim_scd1(
-            conn=conn,
-            df=df,
-            table="dim_customer",
-            schema="dw",
-            business_key="customer_id",
-            surrogate_key="customer_key",
+    def _do_load(c: Connection):
+        return _upsert_dim_scd1(
+            conn=c, df=df, table="dim_customer", schema="dw",
+            business_key="customer_id", surrogate_key="customer_key",
             update_cols=["full_name", "customer_type", "country", "state_province", "territory_id"],
         )
+
+    if conn is not None:
+        result = _do_load(conn)
+    else:
+        with engine.begin() as c:
+            result = _do_load(c)
     logger.info(f"load_dim_customer: {len(df):,} records processed")
     return result
 
 
-def load_fact_sales(df: pd.DataFrame, engine: Engine) -> int:
-    """
-    Load Fact_Sales vào DWH. Idempotent (ON CONFLICT DO NOTHING).
+def _do_load_fact_sales(df: pd.DataFrame, conn: Connection) -> int:
+    """Helper: load fact_sales rows using an existing connection."""
+    df["_load_timestamp"] = df.get("_load_timestamp", datetime.now())
+    mask_ek = df["employee_key"].notna()
+    df["employee_key"] = df["employee_key"].astype(object)
+    df.loc[mask_ek, "employee_key"] = df.loc[mask_ek, "employee_key"].astype(int)
+    df.loc[~mask_ek, "employee_key"] = None
 
-    Returns:
-        int: Số bản ghi đã load.
-    """
+    records = df.to_dict("records")
+    BATCH = 1000
+    for i in range(0, len(records), BATCH):
+        batch = records[i:i + BATCH]
+        try:
+            conn.execute(
+                text("""
+                    INSERT INTO dw.fact_sales (
+                        sales_order_detail_id, sales_order_id, date_key, product_key, customer_key,
+                        territory_key, employee_key, order_qty, unit_price,
+                        unit_price_discount, line_total, standard_cost, gross_profit,
+                        _load_timestamp
+                    ) VALUES (
+                        :sales_order_detail_id, :sales_order_id, :date_key, :product_key, :customer_key,
+                        :territory_key, :employee_key, :order_qty, :unit_price,
+                        :unit_price_discount, :line_total, :standard_cost, :gross_profit,
+                        :_load_timestamp
+                    )
+                    ON CONFLICT (sales_order_detail_id) DO NOTHING
+                """),
+                batch,
+            )
+        except Exception as e:
+            logger.error(f"  Lỗi batch insert fact_sales (rows {i}–{i + len(batch)}): {e}")
+            raise
+    return len(records)
+
+
+def load_fact_sales(df: pd.DataFrame, engine: Engine, conn: Connection = None) -> int:
     if df is None or len(df) == 0:
         logger.info("load_fact_sales: no data to load")
         return 0
 
-    loaded = 0
-    with engine.begin() as conn:
-        for _, row in df.iterrows():
-            try:
-                conn.execute(
-                    text("""
-                        INSERT INTO dw.fact_sales (
-                            sales_order_detail_id, date_key, product_key, customer_key,
-                            territory_key, employee_key, order_qty, unit_price,
-                            unit_price_discount, line_total, standard_cost, gross_profit,
-                            _load_timestamp
-                        ) VALUES (
-                            :sales_order_detail_id, :date_key, :product_key, :customer_key,
-                            :territory_key, :employee_key, :order_qty, :unit_price,
-                            :unit_price_discount, :line_total, :standard_cost, :gross_profit,
-                            :_load_timestamp
-                        )
-                        ON CONFLICT (sales_order_detail_id) DO NOTHING
-                    """),
-                    {
-                        "sales_order_detail_id": int(row["sales_order_detail_id"]),
-                        "date_key": int(row["date_key"]),
-                        "product_key": int(row["product_key"]),
-                        "customer_key": int(row["customer_key"]),
-                        "territory_key": int(row["territory_key"]),
-                        "employee_key": int(row["employee_key"]) if pd.notna(row["employee_key"]) else None,
-                        "order_qty": int(row["order_qty"]),
-                        "unit_price": float(row["unit_price"]),
-                        "unit_price_discount": float(row["unit_price_discount"]),
-                        "line_total": float(row["line_total"]),
-                        "standard_cost": float(row["standard_cost"]),
-                        "gross_profit": float(row["gross_profit"]),
-                        "_load_timestamp": row.get("_load_timestamp", datetime.now()),
-                    },
-                )
-                loaded += 1
-            except Exception as e:
-                logger.error(f"  Lỗi insert fact_sales row {row.get('sales_order_detail_id')}: {e}")
-                raise
-
+    if conn is not None:
+        loaded = _do_load_fact_sales(df, conn)
+    else:
+        with engine.begin() as c:
+            loaded = _do_load_fact_sales(df, c)
     logger.info(f"load_fact_sales: {loaded:,} rows loaded")
     return loaded
 
 
-def load_fact_inventory(df: pd.DataFrame, engine: Engine) -> int:
-    """
-    Load Fact_Inventory vào DWH. Idempotent (ON CONFLICT date_key+product_key DO NOTHING).
+def _do_load_fact_inventory(df: pd.DataFrame, conn: Connection) -> int:
+    """Helper: load fact_inventory rows using an existing connection."""
+    records = df.to_dict("records")
+    BATCH = 1000
+    loaded = 0
+    for i in range(0, len(records), BATCH):
+        batch = records[i:i + BATCH]
+        for r in batch:
+            r["date_key"] = int(r["date_key"])
+            r["product_key"] = int(r["product_key"])
+            r["location_id"] = int(r["location_id"]) if pd.notna(r.get("location_id")) else None
+            r["quantity"] = int(r["quantity"])
+            r["_load_timestamp"] = r.get("_load_timestamp", datetime.now())
+        try:
+            conn.execute(
+                text("""
+                    INSERT INTO dw.fact_inventory (
+                        date_key, product_key, location_id, quantity,
+                        _load_timestamp
+                    ) VALUES (
+                        :date_key, :product_key, :location_id, :quantity,
+                        :_load_timestamp
+                    )
+                    ON CONFLICT (product_key, date_key, COALESCE(location_id, -1)) DO NOTHING
+                """),
+                batch,
+            )
+            loaded += len(batch)
+        except Exception as e:
+            logger.error(f"  Lỗi batch insert fact_inventory (rows {i}–{i + len(batch)}): {e}")
+            raise
+    return loaded
 
-    Returns:
-        int: Số bản ghi đã load.
-    """
+
+def load_fact_inventory(df: pd.DataFrame, engine: Engine, conn: Connection = None) -> int:
     if df is None or len(df) == 0:
         logger.info("load_fact_inventory: no data to load")
         return 0
 
-    loaded = 0
-    with engine.begin() as conn:
-        for _, row in df.iterrows():
-            try:
-                conn.execute(
-                    text("""
-                        INSERT INTO dw.fact_inventory (
-                            date_key, product_key, quantity, ordered_qty, scrapped_qty,
-                            _load_timestamp
-                        ) VALUES (
-                            :date_key, :product_key, :quantity, :ordered_qty, :scrapped_qty,
-                            :_load_timestamp
-                        )
-                    """),
-                    {
-                        "date_key": int(row["date_key"]),
-                        "product_key": int(row["product_key"]),
-                        "quantity": int(row["quantity"]),
-                        "ordered_qty": int(row["ordered_qty"]) if "ordered_qty" in row and pd.notna(row["ordered_qty"]) else None,
-                        "scrapped_qty": int(row["scrapped_qty"]) if "scrapped_qty" in row and pd.notna(row["scrapped_qty"]) else None,
-                        "_load_timestamp": row.get("_load_timestamp", datetime.now()),
-                    },
-                )
-                loaded += 1
-            except Exception as e:
-                logger.error(f"  Lỗi insert fact_inventory: {e}")
-                raise
-
+    if conn is not None:
+        loaded = _do_load_fact_inventory(df, conn)
+    else:
+        with engine.begin() as c:
+            loaded = _do_load_fact_inventory(df, c)
     logger.info(f"load_fact_inventory: {loaded:,} rows loaded")
     return loaded
+
+
+def refresh_daily_sales_agg(engine: Engine, conn: Connection = None) -> None:
+    """Refresh mart.daily_sales_agg từ fact_sales + dim_date."""
+    def _do(c: Connection):
+        c.execute(text("DELETE FROM mart.daily_sales_agg"))
+        c.execute(text("""
+            INSERT INTO mart.daily_sales_agg
+                (date_key, date, year, quarter, month,
+                 order_count, item_count, total_qty,
+                 revenue, gross_profit, customer_count)
+            SELECT
+                f.date_key,
+                d.date,
+                d.year,
+                d.quarter,
+                d.month,
+                COUNT(DISTINCT f.sales_order_id) AS order_count,
+                COUNT(DISTINCT f.sales_order_detail_id) AS item_count,
+                SUM(f.order_qty) AS total_qty,
+                SUM(f.line_total) AS revenue,
+                SUM(f.gross_profit) AS gross_profit,
+                COUNT(DISTINCT f.customer_key) AS customer_count
+            FROM dw.fact_sales f
+            JOIN dw.dim_date d ON f.date_key = d.date_key
+            GROUP BY f.date_key, d.date, d.year, d.quarter, d.month
+        """))
+
+    if conn is not None:
+        _do(conn)
+    else:
+        with engine.begin() as c:
+            _do(c)
+    logger.info("refresh_daily_sales_agg: mart.daily_sales_agg refreshed")

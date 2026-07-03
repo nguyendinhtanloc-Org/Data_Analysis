@@ -17,7 +17,7 @@ import logging
 
 import pandas as pd
 from sqlalchemy import text
-from sqlalchemy.engine import Engine
+from sqlalchemy.engine import Connection, Engine
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +106,7 @@ def validate_pre_load(
 # Lớp 2: Post-load Validation
 # ===========================================================================
 
-def validate_post_load(pg_engine: Engine) -> bool:
+def validate_post_load(pg_engine: Engine, conn: Connection = None) -> bool:
     """
     Lớp 2: Kiểm tra sau khi load vào DWH.
 
@@ -117,6 +117,7 @@ def validate_post_load(pg_engine: Engine) -> bool:
 
     Args:
         pg_engine: SQLAlchemy engine kết nối PostgreSQL DWH.
+        conn: Connection hiện tại (transaction). Nếu None, tạo connection mới.
 
     Returns:
         bool: True nếu pass tất cả.
@@ -125,71 +126,35 @@ def validate_post_load(pg_engine: Engine) -> bool:
     all_valid = True
 
     checks = [
-        # (description, query, expected_value, comparison)
-        (
-            "Fact_Sales: NULL date_key",
-            "SELECT COUNT(*) FROM dw.fact_sales WHERE date_key IS NULL",
-            0, "eq",
-        ),
-        (
-            "Fact_Sales: NULL product_key",
-            "SELECT COUNT(*) FROM dw.fact_sales WHERE product_key IS NULL",
-            0, "eq",
-        ),
-        (
-            "Fact_Sales: NULL customer_key",
-            "SELECT COUNT(*) FROM dw.fact_sales WHERE customer_key IS NULL",
-            0, "eq",
-        ),
-        (
-            "Fact_Sales: NULL territory_key",
-            "SELECT COUNT(*) FROM dw.fact_sales WHERE territory_key IS NULL",
-            0, "eq",
-        ),
-        (
-            "Fact_Sales: Orphan product_key",
-            """SELECT COUNT(*) FROM dw.fact_sales f
-               WHERE NOT EXISTS (SELECT 1 FROM dw.dim_product d WHERE d.product_key = f.product_key)""",
-            0, "eq",
-        ),
-        (
-            "Fact_Sales: Orphan customer_key",
-            """SELECT COUNT(*) FROM dw.fact_sales f
-               WHERE NOT EXISTS (SELECT 1 FROM dw.dim_customer d WHERE d.customer_key = f.customer_key)""",
-            0, "eq",
-        ),
-        (
-            "Fact_Sales: Orphan territory_key",
-            """SELECT COUNT(*) FROM dw.fact_sales f
-               WHERE NOT EXISTS (SELECT 1 FROM dw.dim_territory d WHERE d.territory_key = f.territory_key)""",
-            0, "eq",
-        ),
-        (
-            "Fact_Sales: Orphan date_key",
-            """SELECT COUNT(*) FROM dw.fact_sales f
-               WHERE NOT EXISTS (SELECT 1 FROM dw.dim_date d WHERE d.date_key = f.date_key)""",
-            0, "eq",
-        ),
-        (
-            "Fact_Inventory: Orphan product_key",
-            """SELECT COUNT(*) FROM dw.fact_inventory f
-               WHERE NOT EXISTS (SELECT 1 FROM dw.dim_product d WHERE d.product_key = f.product_key)""",
-            0, "eq",
-        ),
+        ("Fact_Sales: NULL date_key", "SELECT COUNT(*) FROM dw.fact_sales WHERE date_key IS NULL", 0, "eq"),
+        ("Fact_Sales: NULL product_key", "SELECT COUNT(*) FROM dw.fact_sales WHERE product_key IS NULL", 0, "eq"),
+        ("Fact_Sales: NULL customer_key", "SELECT COUNT(*) FROM dw.fact_sales WHERE customer_key IS NULL", 0, "eq"),
+        ("Fact_Sales: NULL territory_key", "SELECT COUNT(*) FROM dw.fact_sales WHERE territory_key IS NULL", 0, "eq"),
+        ("Fact_Sales: Orphan product_key",
+         "SELECT COUNT(*) FROM dw.fact_sales f WHERE NOT EXISTS (SELECT 1 FROM dw.dim_product d WHERE d.product_key = f.product_key)", 0, "eq"),
+        ("Fact_Sales: Orphan customer_key",
+         "SELECT COUNT(*) FROM dw.fact_sales f WHERE NOT EXISTS (SELECT 1 FROM dw.dim_customer d WHERE d.customer_key = f.customer_key)", 0, "eq"),
+        ("Fact_Sales: Orphan territory_key",
+         "SELECT COUNT(*) FROM dw.fact_sales f WHERE NOT EXISTS (SELECT 1 FROM dw.dim_territory d WHERE d.territory_key = f.territory_key)", 0, "eq"),
+        ("Fact_Sales: Orphan date_key",
+         "SELECT COUNT(*) FROM dw.fact_sales f WHERE NOT EXISTS (SELECT 1 FROM dw.dim_date d WHERE d.date_key = f.date_key)", 0, "eq"),
+        ("Fact_Inventory: Orphan product_key",
+         "SELECT COUNT(*) FROM dw.fact_inventory f WHERE NOT EXISTS (SELECT 1 FROM dw.dim_product d WHERE d.product_key = f.product_key)", 0, "eq"),
     ]
 
-    with pg_engine.connect() as conn:
-        for desc, query, expected, cmp in checks:
-            try:
-                result = conn.execute(text(query)).scalar()
-                if cmp == "eq" and result == expected:
-                    logger.info(f"  [Post-load] {desc}: {result} ✓")
-                else:
-                    logger.error(f"  [Post-load] FAIL: {desc}: {result} (expected {expected})")
-                    all_valid = False
-            except Exception as e:
-                logger.error(f"  [Post-load] Lỗi khi chạy check '{desc}': {e}")
+    if conn is None:
+        conn = pg_engine.connect()
+    for desc, query, expected, cmp in checks:
+        try:
+            result = conn.execute(text(query)).scalar()
+            if cmp == "eq" and result == expected:
+                logger.info(f"  [Post-load] {desc}: {result} ✓")
+            else:
+                logger.error(f"  [Post-load] FAIL: {desc}: {result} (expected {expected})")
                 all_valid = False
+        except Exception as e:
+            logger.error(f"  [Post-load] Lỗi khi chạy check '{desc}': {e}")
+            all_valid = False
 
     return all_valid
 
@@ -198,7 +163,7 @@ def validate_post_load(pg_engine: Engine) -> bool:
 # Lớp 3: Cross-check DWH vs OLTP
 # ===========================================================================
 
-def validate_cross_check(pg_engine: Engine, mssql_engine: Engine) -> bool:
+def validate_cross_check(pg_engine: Engine, mssql_engine: Engine, conn: Connection = None) -> bool:
     """
     Lớp 3: So sánh aggregates giữa DWH (PostgreSQL) và OLTP (MSSQL).
 
@@ -209,6 +174,7 @@ def validate_cross_check(pg_engine: Engine, mssql_engine: Engine) -> bool:
     Args:
         pg_engine: Engine PostgreSQL DWH.
         mssql_engine: Engine MSSQL OLTP.
+        conn: Connection hiện tại (transaction). Nếu None, tạo connection mới.
 
     Returns:
         bool: True nếu pass tất cả.
@@ -248,9 +214,12 @@ def validate_cross_check(pg_engine: Engine, mssql_engine: Engine) -> bool:
     }
 
     try:
-        with pg_engine.connect() as pg_conn:
-            dwh_count = pg_conn.execute(text(dwh_queries["count_sales"])).scalar()
-            dwh_sum = float(pg_conn.execute(text(dwh_queries["sum_line_total"])).scalar())
+        if conn is None:
+            pg_conn = pg_engine.connect()
+        else:
+            pg_conn = conn
+        dwh_count = pg_conn.execute(text(dwh_queries["count_sales"])).scalar()
+        dwh_sum = float(pg_conn.execute(text(dwh_queries["sum_line_total"])).scalar())
 
         with mssql_engine.connect() as ms_conn:
             oltp_count = ms_conn.execute(text(oltp_queries["count_sales"])).scalar()
