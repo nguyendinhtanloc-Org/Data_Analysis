@@ -1,19 +1,19 @@
 {
   "watermarks": {
-    "Sales.SalesOrderDetail": "2026-06-19T16:52:29.789051",
-    "Sales.SalesOrderHeader": "2026-06-19T16:52:29.789051",
-    "Production.Product": "2026-06-19T16:52:29.789051",
-    "Production.ProductSubcategory": "2026-06-19T16:52:29.789051",
-    "Production.ProductCategory": "2026-06-19T16:52:29.789051",
-    "Sales.Customer": "2026-06-19T16:52:29.789051",
-    "Person.Person": "2026-06-19T16:52:29.789051",
-    "Sales.SalesTerritory": "2026-06-19T16:52:29.789051",
-    "HumanResources.Employee": "2026-06-19T16:52:29.789051",
-    "HumanResources.EmployeeDepartmentHistory": "2026-06-19T16:52:29.789051",
-    "HumanResources.Department": "2026-06-19T16:52:29.789051",
-    "Production.ProductInventory": "2026-06-19T16:52:29.789051",
-    "Production.WorkOrder": "2026-06-19T16:52:29.789051"
+    "Sales.SalesOrderDetail": "2026-06-26T05:09:59.294219",
+    "Sales.SalesOrderHeader": "2026-06-26T05:09:59.294219",
+    "Production.Product": "2026-06-26T05:09:59.294219",
+    "Production.ProductSubcategory": "2026-06-26T05:09:59.294219",
+    "Production.ProductCategory": "2026-06-26T05:09:59.294219",
+    "Sales.Customer": "2026-06-26T05:09:59.294219",
+    "Person.Person": "2026-06-26T05:09:59.294219",
+    "Sales.SalesTerritory": "2026-06-26T05:09:59.294219",
+    "HumanResources.Employee": "2026-06-26T05:09:59.294219",
+    "HumanResources.EmployeeDepartmentHistory": "2026-06-26T05:09:59.294219",
+    "HumanResources.Department": "2026-06-26T05:09:59.294219",
+    "Production.ProductInventory": "2026-06-26T05:09:59.294219",
+    "Production.WorkOrder": "2026-06-26T05:09:59.294219"
   },
-  "last_run": "2026-06-19T16:52:29.783383",
+  "last_run": "2026-06-26T05:09:59.293692",
   "last_run_status": "SUCCESS"
 }
