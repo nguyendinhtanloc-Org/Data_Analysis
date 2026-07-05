@@ -21,34 +21,23 @@ import logging
 import os
 import sys
 
-# Thêm project root vào sys.path để import src.* hoạt động
-# dù chạy bằng `python src/etl/etl.py` hay `python -m src.etl.etl`
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
-
-try:
-    from dotenv import load_dotenv
-except ImportError:
-    # Trong Docker container env vars đã được inject qua env_file
-    load_dotenv = lambda: None  # noqa: E731
-
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
 from src.config import load_postgres_settings
 from src.watermark import reset_all_watermarks
 
-# Load biến môi trường từ .env
 load_dotenv()
 
-# Cấu hình logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+if os.getenv("LOG_FORMAT", "").lower() == "json":
+    from src.log_utils import setup_logging
+    setup_logging()
+else:
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[logging.StreamHandler(sys.stdout)],
+    )
 logger = logging.getLogger(__name__)
 
 
@@ -108,6 +97,27 @@ def main():
         action="store_true",
         help="Chỉ kiểm tra kết nối DB, không chạy ETL",
     )
+    parser.add_argument(
+        "--snapshot",
+        action="store_true",
+        help="Chỉ chạy snapshot KPI (không chạy ETL)",
+    )
+    parser.add_argument(
+        "--analytics",
+        choices=["kpi", "contribution", "drilldown", "causal", "all"],
+        default=None,
+        help="Chạy phân tích nâng cao",
+    )
+    parser.add_argument(
+        "--period",
+        default="2014Q2",
+        help="Period key cho analytics (vd: 2014Q2). AdventureWorks data covers 2010-2014.",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Refresh fact data: xoá fact_sales/inventory trong range rồi full load lại. Dùng sau khi sửa transform logic.",
+    )
     args = parser.parse_args()
 
     # --- Chỉ test kết nối ---
@@ -121,8 +131,69 @@ def main():
             logger.error("✗ Kiểm tra kết nối thất bại.")
             sys.exit(1)
 
-    # --- Reset watermark ---
-    if args.reset:
+    # --- Chỉ chạy snapshot ---
+    if args.snapshot:
+        from src.analytics.snapshot_manager import run_kpi_snapshot
+        logger.info("Chạy KPI snapshot...")
+        rows = run_kpi_snapshot(engine, snapshot_type="Q")
+        logger.info(f"KPI Snapshot hoàn tất: {rows} rows")
+        sys.exit(0)
+
+    # --- Chạy analytics độc lập ---
+    if args.analytics:
+        if args.analytics == "kpi" or args.analytics == "all":
+            from src.analytics.snapshot_manager import run_kpi_snapshot
+            logger.info(f"Chạy KPI snapshot cho period {args.period}...")
+            run_kpi_snapshot(engine, snapshot_type="Q")
+
+        if args.analytics == "contribution" or args.analytics == "all":
+            from src.analytics.contribution import contribution_breakdown, save_period_comparison
+            logger.info(f"Chạy contribution analysis...")
+            parts = args.period.split("Q")
+            year, q = int(parts[0]), int(parts[1])
+            from src.analytics.kpi_calculator import get_quarter_boundaries, get_period_key
+            c_start, c_end = get_quarter_boundaries(year, q)
+            if q == 1:
+                p_start, p_end = get_quarter_boundaries(year - 1, 4)
+            else:
+                p_start, p_end = get_quarter_boundaries(year, q - 1)
+            for dim in ["category", "territory", "customer_type"]:
+                results = contribution_breakdown(engine, "revenue", c_start, c_end, p_start, p_end, dim)
+                save_period_comparison(engine, results)
+                logger.info(f"  Contribution ({dim}): {len(results)} rows")
+
+        if args.analytics == "drilldown" or args.analytics == "all":
+            from src.analytics.drill_down import drill_down
+            logger.info(f"Chạy drill-down analysis...")
+            parts = args.period.split("Q")
+            year, q = int(parts[0]), int(parts[1])
+            from src.analytics.kpi_calculator import get_quarter_boundaries
+            c_start, c_end = get_quarter_boundaries(year, q)
+            if q == 1:
+                p_start, p_end = get_quarter_boundaries(year - 1, 4)
+            else:
+                p_start, p_end = get_quarter_boundaries(year, q - 1)
+            results = drill_down(engine, "revenue", c_start, c_end, p_start, p_end)
+            logger.info(f"Drill-down: {len(results)} insights generated")
+
+        if args.analytics == "causal" or args.analytics == "all":
+            from src.analytics.causal import price_elasticity
+            logger.info(f"Chạy causal analysis...")
+            for cat in ["Bikes", "Clothing", "Accessories", None]:
+                result = price_elasticity(engine, category=cat)
+                logger.info(f"  PED ({cat or 'overall'}): {result.get('interpretation', result.get('error', 'N/A'))}")
+
+        sys.exit(0)
+
+    # --- Refresh: xoá fact cũ trước khi full load (dùng sau khi sửa transform) ---
+    if args.refresh:
+        logger.info("Xoá fact_sales và fact_inventory...")
+        with engine.begin() as conn:
+            conn.execute(text("DELETE FROM dw.fact_sales"))
+            conn.execute(text("DELETE FROM dw.fact_inventory"))
+        logger.info("Fact tables cleared. Tiếp theo sẽ chạy full load.")
+        use_incremental = False
+    elif args.reset:
         logger.info("Reset toàn bộ watermark...")
         reset_all_watermarks()
         use_incremental = False
@@ -130,6 +201,16 @@ def main():
         use_incremental = False
     else:
         use_incremental = True
+        # Auto-detect first run: nếu chưa có watermark nào, chạy full load
+        from src.watermark import get_watermark
+        has_any_watermark = any(
+            get_watermark(k) is not None
+            for k in ["Sales.SalesOrderHeader", "Sales.SalesOrderDetail",
+                       "Production.ProductInventory"]
+        )
+        if not has_any_watermark:
+            logger.info("Chưa có watermark — chạy full load mặc định cho lần đầu")
+            use_incremental = False
 
     # --- Import pipeline ở đây để tránh circular import ---
     from src.etl.pipeline import run_full_etl_pipeline

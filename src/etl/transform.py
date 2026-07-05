@@ -53,7 +53,7 @@ def deduplicate_by_modified(df: pd.DataFrame, natural_key: str | list[str]) -> p
         natural_key = [natural_key]
     # Chuẩn hóa tên cột tham chiếu sang lowercase
     key_cols_lower = [k.lower() for k in natural_key]
-    mod_col = next((c for c in df.columns if "modifieddate" in c.lower()), None)
+    mod_col = next((c for c in df.columns if "modified" in c.lower() and "date" in c.lower()), None)
     if mod_col:
         df = df.sort_values(mod_col, ascending=False)
     df = df.drop_duplicates(subset=key_cols_lower, keep="first")
@@ -257,18 +257,16 @@ def transform_dim_customer(df_raw: pd.DataFrame) -> pd.DataFrame:
     df["fullname"] = df["fullname"].fillna("Unknown")
     df["customertype"] = df["customertype"].fillna("Unknown")
     df["country"] = df["country"].fillna("Unknown")
-    df["stateprovince"] = df["stateprovince"].fillna("Unknown")
 
     df = df.rename(columns={
         "customerid": "customer_id",
         "fullname": "full_name",
         "customertype": "customer_type",
         "country": "country",
-        "stateprovince": "state_province",
         "territoryid": "territory_id",
     })
 
-    cols = ["customer_id", "full_name", "customer_type", "country", "state_province", "territory_id"]
+    cols = ["customer_id", "full_name", "customer_type", "country", "territory_id"]
     df = df[cols].copy()
     df = add_load_timestamp(df)
     logger.info(f"transform_dim_customer: {original_count} → {len(df):,} rows")
@@ -342,15 +340,52 @@ def transform_fact_sales(
     df["orderdate"] = pd.to_datetime(df["orderdate"])
     df["date_key"] = df["orderdate"].dt.strftime("%Y%m%d").astype(int)
 
-    # --- gross_profit = line_total - (standard_cost * order_qty) ---
-    df["gross_profit"] = (
-        df["linetotal"] - (df["standardcost"] * df["orderqty"])
-    ).round(2)
-
     # --- Surrogate key lookup ---
-    # Dim_Product: lấy current record
-    prod_map = dim_product[dim_product["is_current"] == True][["product_id", "product_key"]].drop_duplicates("product_id")
-    df = df.merge(prod_map, left_on="productid", right_on="product_id", how="left")
+    # Dim_Product: lookup theo valid range (SCD Type 2)
+    # Build lookup: product_id -> list of (valid_from, valid_to, product_key, is_current, standard_cost)
+    prod_versions = {}
+    for _, prow in dim_product.iterrows():
+        pid = int(prow["product_id"])
+        prod_versions.setdefault(pid, []).append((
+            prow["valid_from"], prow["valid_to"],
+            int(prow["product_key"]),
+            prow.get("is_current", False),
+            float(prow["standard_cost"]),
+        ))
+
+    def _lookup_product_key(pid_val, orderdate_val):
+        if pd.isna(pid_val):
+            return pd.NA
+        pid = int(pid_val)
+        versions = prod_versions.get(pid)
+        if not versions:
+            logger.warning(f"  ProductID={pid} not found in dim_product — dropped")
+            return pd.NA
+        od = pd.Timestamp(orderdate_val)
+        for vf, vt, pk, _, _ in versions:
+            if vf <= od and (vt is None or vt > od):
+                return pk
+        fallback = None
+        for _, _, pk, is_curr, _ in versions:
+            if is_curr:
+                fallback = pk
+                break
+        if fallback is None:
+            fallback = versions[0][2]
+        logger.warning(f"  ProductID={pid} no valid-range match for {od.date()} — using fallback product_key={fallback}")
+        return fallback
+
+    df["product_key"] = df.apply(
+        lambda r: _lookup_product_key(r["productid"], r["orderdate"]), axis=1
+    )
+
+    # --- Overwrite standard_cost with historical SCD2 value ---
+    # Extract's p.StandardCost is the *current* cost, not the cost at time of sale.
+    # After product_key is resolved to the correct SCD2 version, use that version's cost.
+    prod_cost_map = dim_product[["product_key", "standard_cost"]].drop_duplicates("product_key")
+    cost_map = dict(zip(prod_cost_map["product_key"], prod_cost_map["standard_cost"]))
+    df["standard_cost"] = df["product_key"].map(cost_map)
+    df["gross_profit"] = (df["linetotal"] - df["standard_cost"] * df["orderqty"]).round(2)
 
     cust_map = dim_customer[["customer_id", "customer_key"]].drop_duplicates("customer_id")
     df = df.merge(cust_map, left_on="customerid", right_on="customer_id", how="left")
@@ -369,15 +404,19 @@ def transform_fact_sales(
     # --- Final columns ---
     df = df.rename(columns={
         "salesorderdetailid": "sales_order_detail_id",
+        "salesorderid": "sales_order_id",
         "orderqty": "order_qty",
         "unitprice": "unit_price",
         "unitpricediscount": "unit_price_discount",
         "linetotal": "line_total",
-        "standardcost": "standard_cost",
     })
+    # standard_cost was already mapped from SCD2 historical lookup above;
+    # drop the original standardcost column to avoid duplicate column names
+    if "standardcost" in df.columns:
+        df = df.drop(columns=["standardcost"])
 
     cols = [
-        "sales_order_detail_id", "date_key",
+        "sales_order_detail_id", "sales_order_id", "date_key",
         "product_key", "customer_key", "territory_key", "employee_key",
         "order_qty", "unit_price", "unit_price_discount",
         "line_total", "standard_cost", "gross_profit",
@@ -409,16 +448,12 @@ def transform_fact_inventory(
     Data Quality:
       - ProductID null → DROP + log
       - Quantity NULL → DROP + log
-      - Duplicate ProductID → SUM (đã aggregate ở extract)
 
     Args:
-        df_raw: Raw extract từ MSSQL (đã aggregated by ProductID).
+        df_raw: Raw extract từ MSSQL (grouped by ProductID, LocationID).
         dim_product: Dim_Product đã load (có product_id, product_key).
-        snapshot_date: Ngày snapshot (mặc định là hôm nay).
+        snapshot_date: Ngày snapshot. Nếu None, dùng từ cột SnapshotDate hoặc hôm nay.
     """
-    if snapshot_date is None:
-        snapshot_date = date.today()
-
     df = standardize_column_names(df_raw).copy()
     original_count = len(df)
 
@@ -432,25 +467,51 @@ def transform_fact_inventory(
     df = df[df["quantity"].notna()].copy()
     log_dropped_rows(pd.DataFrame(range(before)), pd.DataFrame(range(len(df))), "Quantity IS NULL")
 
-    # date_key từ snapshot_date
+    # date_key: ưu tiên snapshot_date từ param, fallback về SnapshotDate từ extract
+    if snapshot_date is None:
+        date_col = next((c for c in df.columns if "snapshotdate" in c.lower()), None)
+        if date_col and df[date_col].notna().any():
+            snapshot_date = pd.to_datetime(df[date_col].max()).date()
+        else:
+            snapshot_date = date.today()
     date_key = int(snapshot_date.strftime("%Y%m%d"))
     df["date_key"] = date_key
 
-    # Surrogate key lookup
-    prod_map = dim_product[dim_product["is_current"] == True][["product_id", "product_key"]].drop_duplicates("product_id")
-    df = df.merge(prod_map, left_on="productid", right_on="product_id", how="left")
+    # Surrogate key lookup: SCD2 valid-range matching theo snapshot_date
+    prod_versions = {}
+    for _, prow in dim_product.iterrows():
+        pid = int(prow["product_id"])
+        prod_versions.setdefault(pid, []).append((
+            prow["valid_from"], prow["valid_to"],
+            int(prow["product_key"]),
+        ))
+
+    def _lookup_product_key(pid_val):
+        if pd.isna(pid_val):
+            return pd.NA
+        pid = int(pid_val)
+        versions = prod_versions.get(pid)
+        if not versions:
+            return pd.NA
+        for vf, vt, pk in versions:
+            vf_ts = pd.Timestamp(vf)
+            vt_ts = pd.Timestamp(vt) if vt is not None else None
+            vd = pd.Timestamp(snapshot_date)
+            if vf_ts <= vd and (vt_ts is None or vt_ts > vd):
+                return pk
+        return versions[-1][2]
+
+    df["product_key"] = df["productid"].apply(_lookup_product_key)
 
     before = len(df)
     df = df[df["product_key"].notna()].copy()
     log_dropped_rows(pd.DataFrame(range(before)), pd.DataFrame(range(len(df))), "Orphan product_key")
 
-    df = df.rename(columns={
-        "quantity": "quantity",
-        "orderedqty": "ordered_qty",
-        "scrappedqty": "scrapped_qty",
-    })
+    df["location_id"] = df.get("locationid")
+    df["location_id"] = df["location_id"].where(df["location_id"].notna(), None)
+    df["location_id"] = pd.array(df["location_id"], dtype=pd.Int64Dtype())
 
-    cols = ["date_key", "product_key", "quantity", "ordered_qty", "scrapped_qty"]
+    cols = ["date_key", "product_key", "location_id", "quantity"]
     df = df[[c for c in cols if c in df.columns]].copy()
     df["product_key"] = df["product_key"].astype(int)
 

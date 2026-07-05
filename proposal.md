@@ -38,7 +38,7 @@ Hệ thống phục vụ ba nhóm người dùng cụ thể. Mỗi nhóm không 
 | Q5 | Sản phẩm nào đang tồn kho bất thường? | Isolation Forest |
 | Q6 | Khách hàng phân thành những nhóm hành vi nào? | K-Means trên RFM |
 | Q7 | Chiết khấu đang ảnh hưởng thực sự như thế nào đến biên lợi nhuận? | Discount vs Margin analysis |
-| Q8–Q10 | Hiệu quả vận hành tài chính: DSO, DPO, Cash Conversion Cycle | Financial KPI trend |
+| Q8–Q9 | Hiệu quả vận hành tài chính: DSO, DPO (ước lượng từ proxy data, xem giới hạn Phần VI) | Financial KPI trend |
 
 ### 1.4 Giả thuyết kỳ vọng trước khi phân tích
 
@@ -53,7 +53,7 @@ Phân tích tốt bắt đầu từ giả thuyết có cơ sở, không phải t
 | H5 | Components có tỷ lệ tồn kho bất thường cao nhất | Phụ tùng thường mua theo lô lớn với lead time dài, nhu cầu thực khó dự báo chính xác |
 | H6 | K-Means RFM tách được ít nhất 3 nhóm khách hàng có hành vi khác biệt rõ ràng | RFM là framework phân cụm khách hàng chuẩn trong bán lẻ (Hughes, 1994); Silhouette Score kỳ vọng > 0.35 |
 | H7 | Danh mục có discount trung bình cao không bù đắp được margin bị mất | Price elasticity thấp trong bán lẻ chuyên dụng — volume tăng không đủ bù margin giảm |
-| H8 | Cash Conversion Cycle nằm trong khoảng 45–75 ngày và cải thiện theo thời gian | Benchmark ngành bán lẻ thể thao (Sageworks Industry Report, 2015) |
+| H8 | DSO và DPO ước lượng có xu hướng cải thiện theo thời gian | Benchmark ngành bán lẻ thể thao (Sageworks, 2015) — ước lượng từ proxy data |
 
 ## PHẦN II — GIẢI PHÁP KỸ THUẬT
 
@@ -184,7 +184,7 @@ Dim_Product dùng SCD Type 2 vì list_price và standard_cost thay đổi theo t
 | --- | --- | --- |
 | Pre-load | Row count sau Extract, schema không thay đổi, bảng không rỗng | Không có bảng trả về 0 bản ghi bất ngờ |
 | Post-load | Orphan record, row count staging vs DWH, null ở cột FK | 0 orphan, 0 null FK, row count khớp 100% |
-| Cross-check | SUM(line_total) DWH vs OLTP, COUNT(order_id) theo năm | Khớp 100% với nguồn OLTP |
+| Cross-check | SUM(line_total) DWH vs OLTP, COUNT(sales_order_detail_id) theo năm | Khớp 100% với nguồn OLTP |
 
 ## PHẦN III — PHÂN TÍCH SQL & KIỂM CHỨNG GIẢ THUYẾT
 
@@ -260,7 +260,7 @@ Kiểm chứng H7. revenue_lost_to_discount là con số bị ẩn hoàn toàn t
 ```sql
 SELECT
     p.category,
-    COUNT(DISTINCT f.order_id)                          AS order_count,
+    COUNT(DISTINCT f.sales_order_detail_id)             AS order_count,
     ROUND(AVG(f.unit_price_discount) * 100, 2)          AS avg_discount_pct,
     SUM(f.line_total)                                    AS net_revenue,
     SUM(f.unit_price * f.order_qty)                      AS gross_revenue_no_discount,
@@ -273,9 +273,9 @@ GROUP BY p.category
 ORDER BY avg_discount_pct DESC;
 ```
 
-### Q8–Q10 — Cash Conversion Cycle
+### Q8–Q9 — Hiệu quả vận hành tài chính (DSO, DPO)
 
-CCC = DIO + DSO − DPO. CCC âm nghĩa doanh nghiệp thu tiền trước khi phải trả — mô hình vận hành lý tưởng. DSO và DPO trong dự án này tính xấp xỉ từ SalesOrderHeader và PurchaseOrderDetail vì AdventureWorks không có bảng AR/AP chính thức — điều này được ghi rõ trong báo cáo như một giới hạn đã biết.
+> **Lưu ý quan trọng:** DSO và DPO trong dự án này được ước lượng từ SalesOrderHeader và PurchaseOrderDetail vì AdventureWorks không có bảng AR/AP chính thức. Các chỉ số này chỉ mang tính tham khảo, không phải KPI tài chính chính thức. CCC (Cash Conversion Cycle) không được tính do thiếu dữ liệu AR/AP đáng tin cậy.
 
 ## PHẦN IV — MACHINE LEARNING
 
@@ -300,7 +300,7 @@ WITH rfm_raw AS (
         c.customer_key,
         c.full_name,
         MAX(d.date)                AS last_purchase_date,
-        COUNT(DISTINCT f.order_id) AS frequency,
+        COUNT(f.sales_order_detail_id) AS frequency,
         SUM(f.line_total)          AS monetary
     FROM dw.Fact_Sales f
     JOIN dw.Dim_Customer c USING (customer_key)

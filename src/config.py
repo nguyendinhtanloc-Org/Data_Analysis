@@ -78,12 +78,15 @@ def load_postgres_settings() -> PostgresSettings:
 
 
 def load_mssql_settings() -> MSSQLSettings:
-    """Tạo cấu hình DB MSSQL từ biến môi trường."""
-
+    """Tạo cấu hình DB MSSQL từ biến môi trường.
+    
+    Hỗ trợ cả MSSQL_DB (cũ) và ETL_SOURCE_DATABASE (mới).
+    """
+    db_name = os.getenv("ETL_SOURCE_DATABASE") or os.getenv("MSSQL_DB", "AdventureWorks2022")
     return MSSQLSettings(
         user=get_env("MSSQL_USER", "sa"),
         password=get_required_env("MSSQL_PASSWORD"),
         host=get_env("MSSQL_HOST", "localhost"),
         port=get_env("MSSQL_PORT", "1433"),
-        name=get_env("MSSQL_DB", "AdventureWorks2022"),
+        name=db_name,
     )

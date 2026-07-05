@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Lint with flake8
+        run: |
+          pip install flake8
+          flake8 src/ --count --select=E9,F63,F7,F82 --show-source --statistics
+          flake8 src/ --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Run unit tests
+        run: |
+          python -m pytest tests/ -v \
+            --ignore=tests/test_config.py \
+            --ignore=tests/test_counterexamples.py \
+            --ignore=tests/test_integration.py \
+            -x
+      - name: Run counterexample tests
+        run: |
+          python -m pytest tests/test_counterexamples.py -v
+
+  schema-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check schema divergence between ddl_script.sql and init_dw_tables.py
+        run: |
+          SQL_TABLES=$(grep -c 'CREATE TABLE' sql/ddl_script.sql)
+          PY_TABLES=$(grep -c 'CREATE TABLE' scripts/init_dw_tables.py)
+          if [ "$SQL_TABLES" -ne "$PY_TABLES" ]; then
+            echo "SCHEMA DIVERGENCE: ddl_script.sql has $SQL_TABLES tables, init_dw_tables.py has $PY_TABLES"
+            exit 1
+          fi
+          echo "Schema check OK: $SQL_TABLES tables in both files"
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Docker image
+        run: docker build -t adventureworks-dw .

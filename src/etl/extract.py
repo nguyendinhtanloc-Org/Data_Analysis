@@ -141,7 +141,7 @@ def extract_dim_customer(use_incremental: bool = True) -> pd.DataFrame:
     """
     Trích xuất dữ liệu cho Dim_Customer từ MSSQL.
 
-    JOIN: Sales.Customer + Person.Person + Sales.Store + Person.StateProvince + Person.CountryRegion
+    JOIN: Sales.Customer + Person.Person + Sales.Store + Sales.SalesTerritory + Person.CountryRegion
     customer_type: 'Individual' nếu có PersonID, 'Store' nếu có StoreID
     """
     engine = create_mssql_engine()
@@ -163,15 +163,13 @@ def extract_dim_customer(use_incremental: bool = True) -> pd.DataFrame:
                 ELSE 'Unknown'
             END AS CustomerType,
             cr.Name AS Country,
-            sp.Name AS StateProvince,
             c.TerritoryID,
             c.ModifiedDate
         FROM Sales.Customer c
         LEFT JOIN Person.Person p ON c.PersonID = p.BusinessEntityID
         LEFT JOIN Sales.Store s ON c.StoreID = s.BusinessEntityID
         LEFT JOIN Sales.SalesTerritory st ON c.TerritoryID = st.TerritoryID
-        LEFT JOIN Person.StateProvince sp ON st.TerritoryID = sp.TerritoryID
-        LEFT JOIN Person.CountryRegion cr ON sp.CountryRegionCode = cr.CountryRegionCode
+        LEFT JOIN Person.CountryRegion cr ON st.CountryRegionCode = cr.CountryRegionCode
         WHERE 1=1
         {wm_clause}
     """
@@ -263,6 +261,7 @@ def extract_fact_sales(use_incremental: bool = True) -> pd.DataFrame:
     query = f"""
         SELECT
             sod.SalesOrderDetailID,
+            soh.SalesOrderID,
             soh.OrderDate,
             sod.ProductID,
             soh.CustomerID,
@@ -293,27 +292,21 @@ def extract_fact_inventory(use_incremental: bool = True) -> pd.DataFrame:
     """
     Trích xuất dữ liệu cho Fact_Inventory từ MSSQL.
 
-    JOIN: Production.ProductInventory + WorkOrder (aggregate scrapped/ordered qty)
-    Snapshot tại ngày chạy ETL.
+    Inventory là current snapshot — luôn full extract (ignore incremental flag).
+    Date_key được set ở transform step dùng DB time từ pipeline context.
     """
     engine = create_mssql_engine()
-    wm_clause, params = _build_watermark_clause("pi", "Production.ProductInventory", use_incremental)
-
-    query = f"""
+    query = """
         SELECT
             pi.ProductID,
+            pi.LocationID,
             SUM(pi.Quantity) AS Quantity,
-            SUM(ISNULL(wo.OrderQty, 0)) AS OrderedQty,
-            SUM(ISNULL(wo.ScrappedQty, 0)) AS ScrappedQty,
-            MAX(pi.ModifiedDate) AS ModifiedDate
+            SYSDATETIME() AS SnapshotDate
         FROM Production.ProductInventory pi
-        LEFT JOIN Production.WorkOrder wo ON pi.ProductID = wo.ProductID
-        WHERE 1=1
-        {wm_clause}
-        GROUP BY pi.ProductID
+        GROUP BY pi.ProductID, pi.LocationID
     """
-    logger.debug(f"extract_fact_inventory (incremental={use_incremental})")
-    df = _run_query(engine, query, params if params else None)
+    logger.debug("extract_fact_inventory (always full — snapshot table)")
+    df = _run_query(engine, query)
     return df
 
 
@@ -349,9 +342,21 @@ def extract_all(use_incremental: bool = True) -> dict[str, pd.DataFrame]:
     return raw
 
 
-def update_extract_watermarks() -> None:
-    """Cập nhật watermark cho tất cả bảng nguồn lên thời điểm hiện tại."""
-    now = datetime.now()
+def update_extract_watermarks(pg_engine=None) -> None:
+    """Cập nhật watermark cho tất cả bảng nguồn lên thời điểm hiện tại.
+
+    Dùng DB time (NOW()) từ PostgreSQL nếu có engine, fallback về Python datetime.
+    Tránh silent data loss do container clock drift (Docker Desktop macOS).
+    """
+    if pg_engine is not None:
+        try:
+            with pg_engine.connect() as conn:
+                row = conn.execute(text("SELECT NOW()")).scalar()
+                now = row.replace(tzinfo=None) if row else datetime.now()
+        except Exception:
+            now = datetime.now()
+    else:
+        now = datetime.now()
     tables = [
         "Sales.SalesOrderDetail", "Sales.SalesOrderHeader", "Production.Product",
         "Production.ProductSubcategory", "Production.ProductCategory",

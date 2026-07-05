@@ -5,7 +5,7 @@ set -e
 rm -rf .venv
 
 # Tạo virtualenv riêng cho dự án để không ảnh hưởng Python hệ thống.
-python3 -m venv .venv
+python3.11 -m venv .venv
 source .venv/bin/activate
 
 # Cài đặt dependency trực tiếp bằng pip mặc định của venv (tránh lỗi hỏng file cert khi nâng cấp pip)

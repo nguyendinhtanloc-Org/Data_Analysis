@@ -3,6 +3,7 @@
 Module này đọc/ghi watermark timestamp từ file config.json,
 dùng để xác định bản ghi mới cần extract trong incremental load.
 """
+import fcntl
 import json
 import logging
 from datetime import datetime
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Đường dẫn tới config.json ở thư mục gốc dự án
 CONFIG_PATH = Path(__file__).parent.parent / "config.json"
+_LOCK_PATH = Path(__file__).parent.parent / "config.json.lock"
 
 
 def _load_config() -> dict:
@@ -24,9 +26,17 @@ def _load_config() -> dict:
 
 
 def _save_config(config: dict) -> None:
-    """Ghi toàn bộ config.json."""
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(config, f, indent=2, default=str)
+    """Ghi toàn bộ config.json với file locking để tránh race condition."""
+    lock_fd = None
+    try:
+        lock_fd = open(_LOCK_PATH, "w")
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(config, f, indent=2, default=str)
+    finally:
+        if lock_fd is not None:
+            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            lock_fd.close()
 
 
 def get_watermark(table_key: str) -> datetime | None:
