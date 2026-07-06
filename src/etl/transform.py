@@ -360,7 +360,7 @@ def transform_fact_sales(
             return pd.NA
         od = pd.Timestamp(orderdate_val)
         for vf, vt, pk, _, _ in versions:
-            if vf <= od and (vt is None or vt > od):
+            if vf <= od and (pd.isna(vt) or vt > od):
                 return pk
         fallback = None
         for _, _, pk, is_curr, _ in versions:
@@ -492,7 +492,7 @@ def transform_fact_inventory(
             return pd.NA
         for vf, vt, pk in versions:
             vf_ts = pd.Timestamp(vf)
-            vt_ts = pd.Timestamp(vt) if vt is not None else None
+            vt_ts = pd.Timestamp(vt) if not pd.isna(vt) else None
             vd = pd.Timestamp(snapshot_date)
             if vf_ts <= vd and (vt_ts is None or vt_ts > vd):
                 return pk

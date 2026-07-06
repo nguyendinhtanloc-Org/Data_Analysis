@@ -112,6 +112,7 @@ def _load_dim_scd2(
     table: str,
     schema: str,
     business_key: str,
+    surrogate_key: str,
     track_cols: list[str],
 ) -> pd.DataFrame:
     """
@@ -265,6 +266,7 @@ def load_dim_product(df: pd.DataFrame, engine: Engine, conn: Connection = None) 
             table="dim_product",
             schema="dw",
             business_key="product_id",
+            surrogate_key="product_key",
             track_cols=["name", "list_price", "standard_cost"],
         )
 
