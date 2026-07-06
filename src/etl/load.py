@@ -135,6 +135,7 @@ def _load_dim_scd2(
             current_map[r[business_key]] = r
 
     now = datetime.now()
+    FAR_PAST = datetime(1900, 1, 1)
     BATCH = 1000
     close_batch = []
     insert_batch = []
@@ -181,7 +182,7 @@ def _load_dim_scd2(
                 "category": str(row["category"])[:100] if pd.notna(row.get("category")) else None,
                 "list_price": float(row["list_price"]),
                 "standard_cost": float(row["standard_cost"]),
-                "valid_from": ts,
+                "valid_from": FAR_PAST if existing_df.empty else ts,
                 "valid_to": None,
                 "is_current": True,
                 "_load_timestamp": ts,
