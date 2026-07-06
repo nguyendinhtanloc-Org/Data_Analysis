@@ -124,7 +124,7 @@ def compute_clusters_for_period(df: pd.DataFrame, period_key: str = "") -> pd.Da
     features = df_model[["recency_days", "frequency", "monetary"]].copy()
     features["recency_days"] = features["recency_days"] * -1
 
-    x = scaler.transform(features)
+    x = scaler.transform(features.values)
 
     # Nearest-centroid assignment
     distances = np.linalg.norm(x[:, np.newaxis] - centroids, axis=2)
