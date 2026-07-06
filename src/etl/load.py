@@ -155,7 +155,7 @@ def _load_dim_scd2(
                 if col in row.index and col in curr.index
             )
             if changed:
-                close_batch.append(int(curr["product_key"]))
+                close_batch.append(int(curr[surrogate_key]))
                 insert_batch.append((row, now))
                 inserted += 1
                 closed += 1
@@ -166,7 +166,7 @@ def _load_dim_scd2(
             batch = close_batch[i:i + BATCH]
             conn.execute(
                 text(f'UPDATE {schema}."{table}" SET valid_to = :vt, is_current = false '
-                     f'WHERE product_key = ANY(:pks)'),
+                     f'WHERE "{surrogate_key}" = ANY(:pks)'),
                 {"vt": now, "pks": batch},
             )
 
@@ -331,7 +331,7 @@ def load_dim_customer(df: pd.DataFrame, engine: Engine, conn: Connection = None)
         return _upsert_dim_scd1(
             conn=c, df=df, table="dim_customer", schema="dw",
             business_key="customer_id", surrogate_key="customer_key",
-            update_cols=["full_name", "customer_type", "country", "state_province", "territory_id"],
+            update_cols=["full_name", "customer_type", "country", "territory_id"],
         )
 
     if conn is not None:

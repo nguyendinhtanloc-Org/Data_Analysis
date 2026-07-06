@@ -208,12 +208,9 @@ def transform_dim_employee(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = deduplicate_by_modified(df, "employeeid")
 
     # Drop nếu hire_date null
-    before = len(df)
+    before_df = df.copy()
     df = df[df["hiredate"].notna()].copy()
-    log_dropped_rows(
-        pd.DataFrame(range(before)), pd.DataFrame(range(len(df))),
-        "hire_date IS NULL"
-    )
+    log_dropped_rows(before_df, df, "hire_date IS NULL")
 
     # Fill nulls
     df["fullname"] = df["fullname"].fillna("Unknown")
