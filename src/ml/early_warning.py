@@ -151,7 +151,7 @@ def detect_inventory_risk(engine, lookback_days: int = 90) -> pd.DataFrame:
     df["risk_level"] = "LOW"
     df.loc[df["months_of_stock"] >= 6, "risk_level"] = "MEDIUM"
     df.loc[df["months_of_stock"] >= 12, "risk_level"] = "HIGH"
-    df = df.sort_values("risk_score", ascending=False)
+    df = df.sort_values("months_of_stock", ascending=False)
     return df
 
 
