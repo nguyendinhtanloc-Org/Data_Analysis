@@ -208,12 +208,9 @@ def transform_dim_employee(df_raw: pd.DataFrame) -> pd.DataFrame:
     df = deduplicate_by_modified(df, "employeeid")
 
     # Drop nếu hire_date null
-    before = len(df)
+    before_df = df.copy()
     df = df[df["hiredate"].notna()].copy()
-    log_dropped_rows(
-        pd.DataFrame(range(before)), pd.DataFrame(range(len(df))),
-        "hire_date IS NULL"
-    )
+    log_dropped_rows(before_df, df, "hire_date IS NULL")
 
     # Fill nulls
     df["fullname"] = df["fullname"].fillna("Unknown")
@@ -363,7 +360,7 @@ def transform_fact_sales(
             return pd.NA
         od = pd.Timestamp(orderdate_val)
         for vf, vt, pk, _, _ in versions:
-            if vf <= od and (vt is None or vt > od):
+            if vf <= od and (pd.isna(vt) or vt > od):
                 return pk
         fallback = None
         for _, _, pk, is_curr, _ in versions:
@@ -495,7 +492,7 @@ def transform_fact_inventory(
             return pd.NA
         for vf, vt, pk in versions:
             vf_ts = pd.Timestamp(vf)
-            vt_ts = pd.Timestamp(vt) if vt is not None else None
+            vt_ts = pd.Timestamp(vt) if not pd.isna(vt) else None
             vd = pd.Timestamp(snapshot_date)
             if vf_ts <= vd and (vt_ts is None or vt_ts > vd):
                 return pk

@@ -133,11 +133,16 @@ def detect_inventory_risk(engine, lookback_days: int = 90) -> pd.DataFrame:
         FROM dw.dim_product p
         JOIN dw.fact_inventory i ON p.product_key = i.product_key
         LEFT JOIN (
-            SELECT product_key,
-                   SUM(order_qty) / 3.0 AS qty_sold
-            FROM dw.fact_sales
-            WHERE date_key >= (SELECT MAX(date_key) - {lookback_days} FROM dw.fact_sales)
-            GROUP BY product_key
+            SELECT f.product_key,
+                   SUM(f.order_qty) / 3.0 AS qty_sold
+            FROM dw.fact_sales f
+            JOIN dw.dim_date d ON f.date_key = d.date_key
+            WHERE d.date >= (
+                SELECT MAX(d2.date) - INTERVAL '{lookback_days} days'
+                FROM dw.fact_sales f2
+                JOIN dw.dim_date d2 ON f2.date_key = d2.date_key
+            )
+            GROUP BY f.product_key
         ) s ON p.product_key = s.product_key
         GROUP BY p.product_key, p.name, p.category
         HAVING AVG(i.quantity) > 0
@@ -151,7 +156,7 @@ def detect_inventory_risk(engine, lookback_days: int = 90) -> pd.DataFrame:
     df["risk_level"] = "LOW"
     df.loc[df["months_of_stock"] >= 6, "risk_level"] = "MEDIUM"
     df.loc[df["months_of_stock"] >= 12, "risk_level"] = "HIGH"
-    df = df.sort_values("risk_score", ascending=False)
+    df = df.sort_values("months_of_stock", ascending=False)
     return df
 
 

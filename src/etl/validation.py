@@ -45,7 +45,7 @@ def check_missing_values(df: pd.DataFrame, columns: list) -> bool:
             continue
         null_count = df[col].isnull().sum()
         if null_count > 0:
-            logger.warning(f"  [Pre-load] Cột '{col}' có {null_count} giá trị null.")
+            logger.error(f"  [Pre-load] Cột '{col}' có {null_count} giá trị null.")
             valid = False
     return valid
 
