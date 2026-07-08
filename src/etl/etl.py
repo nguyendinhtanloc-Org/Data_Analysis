@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 
 from src.config import load_postgres_settings
-from src.watermark import reset_all_watermarks
+from src.watermark import init_audit_tables, reset_all_watermarks
 
 load_dotenv()
 
@@ -48,6 +48,7 @@ def create_db_engine():
 
 
 engine = create_db_engine()
+init_audit_tables(engine)
 
 
 def test_connection() -> bool:
@@ -195,7 +196,7 @@ def main():
         use_incremental = False
     elif args.reset:
         logger.info("Reset toàn bộ watermark...")
-        reset_all_watermarks()
+        reset_all_watermarks(engine=engine)
         use_incremental = False
     elif args.full:
         use_incremental = False
@@ -204,7 +205,7 @@ def main():
         # Auto-detect first run: nếu chưa có watermark nào, chạy full load
         from src.watermark import get_watermark
         has_any_watermark = any(
-            get_watermark(k) is not None
+            get_watermark(k, engine=engine) is not None
             for k in ["Sales.SalesOrderHeader", "Sales.SalesOrderDetail",
                        "Production.ProductInventory"]
         )
