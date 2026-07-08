@@ -150,9 +150,14 @@ def price_elasticity(
     interval = "month" if period == "monthly" else "quarter"
     date_trunc = f"DATE_TRUNC('{interval}', d.date)"
 
+    _VALID_CATEGORIES = {"Bikes", "Clothing", "Accessories", "Components"}
     cat_filter = ""
     if category:
-        cat_filter = f"AND p.category = '{category}'"
+        safe_cat = category if category in _VALID_CATEGORIES else None
+        if safe_cat is None:
+            logger.warning(f"price_elasticity: unknown category '{category}' — ignored")
+            return {"error": f"Invalid category: {category}. Valid: {sorted(_VALID_CATEGORIES)}"}
+        cat_filter = f"AND p.category = '{safe_cat}'"
 
     query = f"""
         SELECT {date_trunc} AS period,

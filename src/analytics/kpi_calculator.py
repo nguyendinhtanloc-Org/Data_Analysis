@@ -50,7 +50,7 @@ KPI_DEFINITIONS = {
             WHERE d.date BETWEEN :start_date AND :end_date
         """,
     },
-    "avg_order_value": {
+    "revenue_per_order": {
         "query": """
             SELECT CASE
                 WHEN COUNT(DISTINCT f.sales_order_id) = 0 THEN 0
