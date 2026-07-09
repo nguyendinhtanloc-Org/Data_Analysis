@@ -2,74 +2,63 @@
 
 ## 1. Mục tiêu Dashboard
 
-Dashboard **Inventory & Operational Decision Support** giám sát hàng tồn kho bất thường (ML anomaly detection), vòng quay tồn kho, và khuyến nghị vận hành từ decision support engine.
+Dashboard **Inventory & Operational Decision Support** giám sát tồn kho rủi ro (zero-sales / slow-moving), giá trị tồn kho, khuyến nghị vận hành.
 
-Câu hỏi chính:
-- Sản phẩm nào có dấu hiệu tồn kho bất thường (quá nhiều, quá ít, hoặc không có doanh số)?
-- Vòng quay hàng tồn kho thay đổi thế nào qua các quý?
-- Ngành hàng nào có nhiều vấn đề tồn kho nhất?
-- Hệ thống khuyến nghị hành động gì cho từng vấn đề?
-- Khách hàng di chuyển (churn / mới) giữa các kỳ ra sao?
+**Wording bắt buộc:** "Inventory Risk / Zero-Sales Warning" — KHÔNG dùng "anomaly" (anomaly_flag = 0).
 
 ## 2. Nguồn dữ liệu
 
-- **dw.ml_inventory_anomaly**: Isolation Forest output — phát hiện tồn kho bất thường
-- **mart.kpi_snapshot**: Inventory turnover KPI theo quý
-- **dw.decision_support**: Khuyến nghị từ insight engine (entity_type = 'inventory')
-- **mart.customer_migration**: Thống kê churn/acquire cho operational view
+- **dw.ml_inventory_anomaly** — Isolation Forest output (risk flags, DIO, inventory_value)
+- **dw.decision_support** — Khuyến nghị hành động (HIGH/MEDIUM priority)
+- **dw.fact_inventory + dw.dim_product** — Inventory snapshot
 
-## 3. Cards trong Dashboard
+## 3. Cards trong Dashboard (13 cards)
 
-### 3.1 Inventory Anomaly Flags
-- **Loại**: Table
-- **Mô tả**: Danh sách sản phẩm có anomaly_flag=true hoặc zero_sales_flag=true, sắp xếp theo DIO giảm dần
-- **Source**: `dw.ml_inventory_anomaly WHERE anomaly_flag OR zero_sales_flag`
-- **ML Model**: Isolation Forest (contamination=0.05) trên inventory metrics
+### Row 0 — Text heading
+### Row 1 — 4 Scalar
+| Card | Source | Color |
+|---|---|---|
+| C1 · Inventory Risk Products | dw.ml_inventory_anomaly | #F59E0B |
+| C2 · Zero-Sales Warnings | dw.ml_inventory_anomaly | #F59E0B |
+| C3 · High-Priority Actions | dw.decision_support | #DC2626 |
+| C4 · Total Inventory Value | dw.ml_inventory_anomaly | Neutral |
 
-### 3.2 Inventory Turnover Trend
-- **Loại**: Line chart
-- **Mô tả**: Xu hướng vòng quay hàng tồn kho qua các quý
-- **Source**: `mart.kpi_snapshot WHERE kpi_name = 'inventory_turnover'`
+### Row 2 — Table full-width
+- **C5 · Zero-Sales & Slow-Moving Products** (50 products, sorted by DIO desc)
+- Columns: Product, Category, Inv Value, Units Sold, DIO, Risk label
 
-### 3.3 Anomaly Count by Category
-- **Loại**: Bar chart
-- **Mô tả**: Số lượng sản phẩm bất thường theo từng danh mục, kèm DIO trung bình
-- **Source**: `dw.ml_inventory_anomaly GROUP BY category`
+### Row 3 — Risk by Category + Inventory Value
+- **C6 · Inventory Risk Count by Category** (bar, #F59E0B/#DC2626)
+- **C7 · Inventory Value by Category** (horizontal bar, category colors)
 
-### 3.4 Operational Decision Support
-- **Loại**: Table
-- **Mô tả**: Khuyến nghị từ ML insight engine cho entity_type = 'inventory'
-- **Source**: `dw.decision_support WHERE entity_type = 'inventory'`
-- **Tín hiệu**: Inventory Anomaly (zero-sales, DIO cao)
+### Row 4 — Risk Map + Snapshot
+- **C8 · DIO vs Inventory Value — Risk Map** (scatter/bubble: X=Inv Value, Y=DIO, size=Avg Qty, màu=Zero/Has-Sales)
+- **C9 · Top 20 by Inventory Value** (table)
 
-### 3.5 Inventory Value by Category
-- **Loại**: Bar chart
-- **Mô tả**: Tổng giá trị tồn kho và DIO trung bình theo danh mục
-- **Source**: `dw.ml_inventory_anomaly GROUP BY category`
-
-### 3.6 Customer Migration Summary
-- **Loại**: Table
-- **Mô tả**: Thống kê churn và acquire khách hàng theo từng cặp kỳ
-- **Source**: `mart.customer_migration GROUP BY prev_period_key, curr_period_key`
+### Row 5 — Decision Support (3 cards, size_x=8)
+- **C10 · Actions by Priority** (bar, priority colors: HIGH=#DC2626, MEDIUM=#F59E0B, LOW=#94A3B8)
+- **C11 · High-Priority Actions** (table)
+- **C12 · Operational Decision Support — Inventory/Product** (table)
 
 ## 4. ML Model Details
 
-**Inventory Anomaly (Isolation Forest)**:
+**Inventory Risk Detection (Isolation Forest)**:
 - Features: avg_quantity, inventory_value, units_sold
-- Contamination: 0.05
-- Output: anomaly_flag (boolean), anomaly_score
-- Zero-sales flag: sản phẩm có units_sold = 0 nhưng tồn kho > 0
+- Contamination: 0.06
+- anomaly_flag: 0 (không có anomaly thực sự)
+- zero_sales_flag: 209 products
 
-**Kết quả mẫu**:
-- 209 sản phẩm zero-sales warning (cảnh báo, không đánh dấu anomaly)
-- 6 sản phẩm anomaly thực sự
-- Decision support ghi nhận 209 inventory insights (MEDIUM priority)
+| Flag Type | Count | Avg DIO |
+|---|---|---|
+| Zero-Sales Warning | 209 | 999.0 |
+| Has-Sales Warning | 6 | 20.6 |
 
-## 5. Operational Metrics
+**Decision Support**: 18,852 insights (8,339 HIGH + 10,513 MEDIUM)
 
-| Metric | Giá trị |
-|--------|---------|
-| Sản phẩm có tồn kho | 504 |
-| Sản phẩm zero-sales | 209 (41.5%) |
-| Sản phẩm anomaly | 6 |
-| Inventory Turnover Q2 2014 | 0.00 (dữ liệu tồn kho không đủ biến động) |
+## 5. Metabase Dashboard ID
+
+- **ID**: 22
+- **Số cards**: 13
+- **Layout**: 6 rows (heading → 4 scalar → table full → bar+row → bubble+table → 3 cards)
+- **Loại biểu đồ**: scalar, table, bar, horizontal bar (row), scatter/bubble
+- **Lưu ý**: Treemap không được Metabase v0.50.1 hỗ trợ — fallback horizontal bar

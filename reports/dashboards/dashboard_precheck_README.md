@@ -37,7 +37,7 @@ Nếu bỏ qua bước này thì dashboard có thể hiển thị đẹp nhưng 
 | Mart Layer | Đạt | Có KPI snapshot theo period, có comparison, có daily aggregate |
 | ML Output | Đạt | Clustering, anomaly, migration, decision support chạy bằng `make` command |
 | DDL / Init Script | Đạt | Các bảng `dw.ml_*` và `mart.*` đã nằm trong DDL/init script |
-| Metabase Dashboard | Đạt bước kỹ thuật | Đã tạo 3 dashboard và card trả dữ liệu; vẫn cần mở UI kiểm tra layout lần cuối |
+| Metabase Dashboard | Đạt | Đã tạo 3 dashboard (id=11,12,13) với 10+13+12 cards; tất cả trả dữ liệu; layout 5-6 rows; đa dạng biểu đồ (scalar, line, bar, pie, scatter, table) |
 
 ---
 
@@ -443,11 +443,11 @@ Kiểm tra dashboard đã được tạo từ dữ liệu đúng và không còn
 
 Đã tạo 3 dashboard:
 
-| Dashboard | Số card | Nguồn dữ liệu chính |
-|---|---:|---|
-| Business Performance Overview | 7 | `mart.kpi_snapshot`, `mart.period_comparison`, `mart.customer_migration` |
-| Product & Customer Analytics | 7 | `dw.ml_customer_segments`, `dw.fact_sales`, `mart.rfm_snapshot`, `dw.decision_support` |
-| Inventory & Operational Decision Support | 6 | `dw.ml_inventory_anomaly`, `mart.kpi_snapshot`, `dw.decision_support`, `mart.customer_migration` |
+| Dashboard | ID | Số card | Nguồn dữ liệu chính |
+|---|---:|---:|---|
+| Business Performance Overview | 11 | 10 | `mart.kpi_snapshot`, `mart.period_comparison` |
+| Product & Customer Analytics | 12 | 13 | `dw.ml_customer_segments`, `dw.fact_sales`, `mart.rfm_snapshot`, `dw.decision_support` |
+| Inventory & Operational Decision Support | 13 | 12 | `dw.ml_inventory_anomaly`, `dw.fact_inventory`, `dw.decision_support` |
 
 Đã xác nhận:
 
@@ -470,50 +470,48 @@ Trước khi nộp hoặc export PDF, cần mở Metabase UI và kiểm tra bằ
 
 ## 13. Mapping kết quả check vào dashboard
 
-### 13.1. Dashboard 1 — Business Performance Overview
+### 13.1. Dashboard 1 — Business Performance Overview (ID=11, 10 cards)
 
 Dashboard này dùng để chứng minh nhóm đã sửa theo yêu cầu KPI có period/time-series.
 
-Nên có các card:
+Layout: 5 rows
 
-| Card | Nguồn dữ liệu | Lý do |
+| Row | Cards | Loại |
 |---|---|---|
-| KPI Summary 2014Q2 vs 2014Q1 | `mart.kpi_snapshot` | KPI theo kỳ, không tính toàn dataset |
-| Revenue Trend by Quarter | `mart.kpi_snapshot` | Time-series |
-| Gross Margin % Trend | `mart.kpi_snapshot` | Time-series margin |
-| Revenue by Category 2014Q2 | `mart.kpi_snapshot` hoặc `dw.fact_sales` có filter kỳ | Drill-down theo category |
-| Revenue Contribution by Territory | `mart.period_comparison` | Giải thích nguyên nhân biến động KPI |
-| Customer Migration Stats | `mart.customer_migration` | Bổ sung insight hành vi khách hàng theo kỳ |
+| 1 | 4 KPI number (Revenue, Gross Profit, Margin %, Order Count) | Scalar |
+| 2 | Revenue & Gross Profit Trend | Line full-width |
+| 3 | Gross Margin % Trend + Revenue by Category | Line + Bar |
+| 4 | Contribution by Category + Contribution by Territory | Bar + Bar |
+| 5 | KPI Comparison Table 2014Q2 vs 2014Q1 | Table full-width |
 
-### 13.2. Dashboard 2 — Product & Customer Analytics
+### 13.2. Dashboard 2 — Product & Customer Analytics (ID=12, 13 cards)
 
 Dashboard này dùng để chứng minh tích hợp ML customer segmentation.
 
-Nên có các card:
+Layout: 6 rows
 
-| Card | Nguồn dữ liệu | Lý do |
+| Row | Cards | Loại |
 |---|---|---|
-| Customer Segments — RFM Clustering | `dw.ml_customer_segments` | Output K-Means |
-| Segment Details Table | `dw.ml_customer_segments` | Chi tiết RFM từng segment |
-| RFM Cluster Share by Period | `mart.rfm_snapshot` | Segment theo thời gian |
-| Product Revenue by Category 2014Q2 | `dw.fact_sales`, `dw.dim_product`, `dw.dim_date` | Product analytics có filter kỳ |
-| Top 10 Products by Revenue 2014Q2 | `dw.fact_sales`, `dw.dim_product`, `dw.dim_date` | Top product theo kỳ |
-| Customer Decision Support | `dw.decision_support` | Khuyến nghị cho khách hàng |
+| 1 | 4 KPI number (Active Customers, Products, Units, Avg Revenue) | Scalar |
+| 2 | Customer Segments RFM + Segment Details | Bar + Table |
+| 3 | ABC Product Class + Top 10 Products | Bar + Bar |
+| 4 | Top 10 Customers | Table full-width |
+| 5 | Segment Share by Quarter + Revenue by Customer Type | Line + Pie |
+| 6 | Gross Margin % by Category + Cost vs Price Scatter | Bar + Scatter |
 
-### 13.3. Dashboard 3 — Inventory & Operational Decision Support
+### 13.3. Dashboard 3 — Inventory & Operational Decision Support (ID=13, 12 cards)
 
 Dashboard này dùng để chứng minh tích hợp ML inventory risk và decision support.
 
-Nên có các card:
+Layout: 5 rows
 
-| Card | Nguồn dữ liệu | Lý do |
+| Row | Cards | Loại |
 |---|---|---|
-| Inventory Risk Flags — Zero-Sales & Slow-Moving Products | `dw.ml_inventory_anomaly` | Output ML inventory risk |
-| Inventory Risk Count by Category | `dw.ml_inventory_anomaly` | Tổng hợp risk theo category |
-| Inventory Turnover Trend | `mart.kpi_snapshot` | Time-series operational KPI |
-| Operational Decision Support | `dw.decision_support` | Recommended actions |
-| Inventory Value by Category | `dw.ml_inventory_anomaly` hoặc `dw.fact_inventory` + `dw.dim_product` | Tồn kho theo category |
-| Customer Churn & Acquisition Summary | `mart.customer_migration` | Bổ sung vận hành quyết định theo customer migration |
+| 1 | 4 KPI number (Risk Products, Zero-Sales, High Priority, Inventory Value) | Scalar |
+| 2 | Inventory Risk Flags — Zero-Sales & Slow-Moving Products | Table full-width |
+| 3 | Risk Count by Category + Inventory Value by Category | Bar + Bar |
+| 4 | DIO vs Value Scatter + Inventory Snapshot Summary | Scatter + Table |
+| 5 | Actions by Priority + High Priority Actions + Operational DS | Bar + Table + Table |
 
 ---
 
@@ -548,12 +546,14 @@ MB_EMAIL = os.environ["MB_EMAIL"]
 MB_PASS = os.environ["MB_PASS"]
 ```
 
+- Đã chạy lại ML pipeline (anomaly, migration, decision_support) với code mới.
+- `avg_order_value` đã được rename thành `revenue_per_order` trong code — đã cập nhật SQL card D1-C10.
+- Dashboard mới nhất đã rebuild bằng `scripts/setup_metabase.py`.
 - Nếu có thời gian, test lại trên môi trường sạch bằng:
 
 ```bash
 make init-db
 make etl-full
-make snapshot
 make ml
 make analytics-runner period=2014Q2
 python scripts/setup_metabase.py

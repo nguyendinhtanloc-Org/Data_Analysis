@@ -1,11 +1,15 @@
-"""Rebuild 3 Metabase dashboards from scratch with all cards, layout, and colors."""
+"""Rebuild 3 Metabase dashboards per chuẩn spec — 24-col grid, combo, heatmap, bubble, donut."""
 import json, sys, os, time
 import requests
 
 MB_URL = os.getenv("MB_URL", "http://localhost:3000/api")
 MB_EMAIL = os.getenv("MB_EMAIL", "admin@example.com")
 MB_PASS = os.getenv("MB_PASS", "KW9!xPzLmQvR7")
+DB_ID = 2
 COLLECTION_ID = None
+
+P = "2014Q2"
+Q = "2014Q1"
 
 def log(msg):
     print(f"  {msg}")
@@ -25,681 +29,356 @@ def api(method, path, data=None, token=None):
 
 def login():
     props = api("GET", "/session/properties")
-    if not props:
-        raise RuntimeError("Cannot reach Metabase")
-    setup_token = props.get("setup-token")
-    if not props.get("has-user-setup") and setup_token:
-        log("First-time setup...")
-        r = api("POST", "/setup", {
-            "token": setup_token,
-            "user": {"first_name": "Admin", "last_name": "User",
-                     "email": MB_EMAIL, "password": MB_PASS},
-            "prefs": {"site_name": "AdventureWorks BI", "site_locale": "en", "allow_tracking": False},
-        })
-        if r and r.get("id"):
-            return r["id"]
+    if not props: raise RuntimeError("Cannot reach Metabase")
+    tk = props.get("setup-token")
+    if not props.get("has-user-setup") and tk:
+        r = api("POST", "/setup", {"token": tk, "user": {"first_name": "Admin", "last_name": "User", "email": MB_EMAIL, "password": MB_PASS}, "prefs": {"site_name": "AdventureWorks BI", "site_locale": "en", "allow_tracking": False}})
+        if r and r.get("id"): return r["id"]
     r = api("POST", "/session", {"username": MB_EMAIL, "password": MB_PASS})
-    if r and r.get("id"):
-        return r["id"]
+    if r and r.get("id"): return r["id"]
     raise RuntimeError(f"Login failed: {r}")
 
-def get_db_id(token):
-    dbs = api("GET", "/database", token=token)
-    if dbs and dbs.get("data"):
-        for db in dbs["data"]:
-            if db.get("name") == "AdventureWorks DW":
-                return db["id"]
-    log("Adding database...")
-    r = api("POST", "/database", {
-        "name": "AdventureWorks DW", "engine": "postgres",
-        "details": {"host": "postgres", "port": 5432, "dbname": "adventureworks_dw",
-                    "user": "admin", "password": "admin123",
-                    "schema-filters-type": "inclusion", "schemas": "public,dw,mart"},
-        "is_full_sync": True,
-    }, token=token)
-    if r and r.get("id"):
-        time.sleep(5)
-        return r["id"]
-    raise RuntimeError(f"Cannot add database: {r}")
-
-def make_card(name, sql, db_id, display="table", desc="", viz=None, token=None):
-    data = {
-        "name": name, "description": desc, "display": display,
-        "dataset_query": {"database": db_id, "type": "native",
-                          "native": {"query": sql, "template-tags": {}}},
-        "visualization_settings": viz or {},
-        "collection_id": COLLECTION_ID,
-    }
-    r = api("POST", "/card", data, token=token)
+def card(name, sql, display="table", desc=None, viz=None, token=None):
+    payload = {"name": name, "display": display, "dataset_query": {"database": DB_ID, "type": "native", "native": {"query": sql, "template-tags": {}}}, "visualization_settings": viz or {}, "collection_id": COLLECTION_ID}
+    if desc: payload["description"] = desc
+    r = api("POST", "/card", payload, token=token)
     return r.get("id") if r else None
 
-def make_dashboard(name, desc="", token=None):
+def text_card(name, content, token=None):
+    """Create a text/heading card."""
+    return card(name, "SELECT 1 AS _", "scalar", viz={"text": content, "text.align_vertical": "middle", "text.align_horizontal": "center"}, token=token)
+
+def dashboard(name, desc="", token=None):
     r = api("POST", "/dashboard", {"name": name, "description": desc, "collection_id": COLLECTION_ID}, token=token)
     return r.get("id") if r else None
 
 def add_cards(dash_id, cards, token=None):
-    dashcards = []
+    dc = []
     for i, c in enumerate(cards):
-        dashcards.append({
-            "id": -(i + 1), "card_id": c["card_id"],
-            "row": c["row"], "col": c["col"],
-            "size_x": c["size_x"], "size_y": c["size_y"],
-            "parameter_mappings": [], "visualization_settings": {},
-            "dashboard_tab_id": None,
-        })
-    r = api("PUT", f"/dashboard/{dash_id}", {"dashcards": dashcards}, token=token)
-    log(f"  {len(dashcards)} cards → dashboard {dash_id}")
+        dc.append({"id": -(i+1), "card_id": c["card_id"], "row": c["row"], "col": c["col"], "size_x": c["size_x"], "size_y": c["size_y"], "parameter_mappings": [], "visualization_settings": {}, "dashboard_tab_id": None})
+    r = api("PUT", f"/dashboard/{dash_id}", {"dashcards": dc}, token=token)
+    log(f"  {len(dc)} cards → dashboard {dash_id}")
     return r
 
-def delete_old_dashboards(token):
-    """Remove old dashboards but keep cards (which will be archived separately)."""
-    dbs = api("GET", "/dashboard", token=token)
-    if dbs:
-        for d in dbs:
-            # Keep only the ones we're about to create
-            log(f"Will delete old dashboard id={d['id']} '{d['name']}'")
-            api("DELETE", f"/dashboard/{d['id']}", token=token)
-
-def archive_old_cards(token):
-    """Archive old cards to avoid clutter."""
-    cards = api("GET", "/card", token=token)
-    if cards:
-        for c in cards:
-            if c.get("archived"):
-                continue
-            log(f"Archiving old card id={c['id']} '{c['name']}'")
+def cleanup(token):
+    # Archive old cards
+    for c in (api("GET", "/card", token=token) or []):
+        if not c.get("archived"):
             api("PUT", f"/card/{c['id']}", {"archived": True}, token=token)
+    # Delete old dashboards
+    for d in (api("GET", "/dashboard", token=token) or []):
+        api("DELETE", f"/dashboard/{d['id']}", token=token)
+    log("Cleaned up old dashboards & cards")
 
 # ══════════════════════════════════════════════════════════════════════
-def build_all():
-    log("=== Login & setup ===")
-    token = login()
-    db_id = get_db_id(token)
-
-    # Clean slate
-    log("\n=== Cleaning old dashboards & cards ===")
-    archive_old_cards(token)
-    delete_old_dashboards(token)
-
-    # ────────── DASHBOARD 1: Business Performance Overview ──────────
+# DASHBOARD 1: Business Performance Overview
+# ══════════════════════════════════════════════════════════════════════
+def build_d1(token):
     log("\n=== Dashboard 1: Business Performance Overview ===")
+    ids = []
 
-    d1_cards_def = []
+    # Text heading
+    ids.append(text_card("D1-H · Business Performance Overview",
+        "## 📊 Business Performance Overview\n\n"
+        f"**Period:** {P} vs {Q}  |  **Source:** mart.kpi_snapshot (snapshot theo quý)  |  "
+        "**Flow:** KPI → Trend → Contribution → Table", token))
 
-    # C1: Revenue 2014Q2
-    d1_cards_def.append(make_card(
-        "D1-C1 Revenue (2014Q2)",
-        "SELECT ROUND(value / 1000000.0, 2) AS \"Revenue ($M)\"\n"
-        "FROM mart.kpi_snapshot\n"
-        "WHERE kpi_name = 'revenue' AND dimension = 'overall' AND period_key = '2014Q2';",
-        db_id, "scalar", "Revenue in millions",
-        {"scalar.field": "Revenue ($M)"}, token))
+    # C1: Revenue
+    ids.append(card("C1 · Revenue — " + P,
+        f"SELECT ROUND(value/1000000.0,2) AS \"Revenue ($M)\" FROM mart.kpi_snapshot WHERE kpi_name='revenue' AND period_key='{P}' AND dimension='overall'",
+        "scalar", viz={"scalar.field": "Revenue ($M)"}, token=token))
 
-    # C2: Gross Profit 2014Q2
-    d1_cards_def.append(make_card(
-        "D1-C2 Gross Profit (2014Q2)",
-        "SELECT ROUND(value / 1000000.0, 2) AS \"Gross Profit ($M)\"\n"
-        "FROM mart.kpi_snapshot\n"
-        "WHERE kpi_name = 'gross_profit' AND dimension = 'overall' AND period_key = '2014Q2';",
-        db_id, "scalar", "Gross Profit in millions",
-        {"scalar.field": "Gross Profit ($M)"}, token))
+    # C2: Gross Profit
+    ids.append(card("C2 · Gross Profit — " + P,
+        f"SELECT ROUND(value/1000000.0,2) AS \"Gross Profit ($M)\" FROM mart.kpi_snapshot WHERE kpi_name='gross_profit' AND period_key='{P}' AND dimension='overall'",
+        "scalar", viz={"scalar.field": "Gross Profit ($M)"}, token=token))
 
-    # C3: Gross Margin % 2014Q2
-    d1_cards_def.append(make_card(
-        "D1-C3 Gross Margin % (2014Q2)",
-        "SELECT ROUND(value, 2) AS \"Gross Margin (%)\"\n"
-        "FROM mart.kpi_snapshot\n"
-        "WHERE kpi_name = 'gross_margin_pct' AND dimension = 'overall' AND period_key = '2014Q2';",
-        db_id, "scalar", "Gross Margin percentage",
-        {"scalar.field": "Gross Margin (%)"}, token))
+    # C3: Gross Margin %
+    ids.append(card("C3 · Gross Margin % — " + P,
+        f"SELECT ROUND(value,2) AS \"Gross Margin (%)\" FROM mart.kpi_snapshot WHERE kpi_name='gross_margin_pct' AND period_key='{P}' AND dimension='overall'",
+        "scalar", viz={"scalar.field": "Gross Margin (%)"}, token=token))
 
-    # C4: Order Count 2014Q2
-    d1_cards_def.append(make_card(
-        "D1-C4 Order Count (2014Q2)",
-        "SELECT ROUND(value, 0) AS \"Order Count\"\n"
-        "FROM mart.kpi_snapshot\n"
-        "WHERE kpi_name = 'order_count' AND dimension = 'overall' AND period_key = '2014Q2';",
-        db_id, "scalar", "Total orders",
-        {"scalar.field": "Order Count"}, token))
+    # C4: Orders
+    ids.append(card("C4 · Orders — " + P,
+        f"SELECT ROUND(value,0) AS \"Orders\" FROM mart.kpi_snapshot WHERE kpi_name='order_count' AND period_key='{P}' AND dimension='overall'",
+        "scalar", viz={"scalar.field": "Orders"}, token=token))
 
-    # C5: Revenue & Gross Profit Trend
-    d1_cards_def.append(make_card(
-        "D1-C5 Revenue & Gross Profit Trend",
-        "SELECT\n"
-        "    period_key AS \"Period\",\n"
-        "    ROUND(MAX(CASE WHEN kpi_name = 'revenue' THEN value END) / 1000000.0, 2) AS \"Revenue ($M)\",\n"
-        "    ROUND(MAX(CASE WHEN kpi_name = 'gross_profit' THEN value END) / 1000000.0, 2) AS \"Gross Profit ($M)\"\n"
-        "FROM mart.kpi_snapshot\n"
-        "WHERE kpi_name IN ('revenue', 'gross_profit')\n"
-        "  AND dimension = 'overall'\n"
-        "  AND period_key BETWEEN '2011Q2' AND '2014Q2'\n"
-        "GROUP BY period_key\n"
-        "ORDER BY period_key;",
-        db_id, "line", "Revenue and gross profit over quarters",
-        {"graph.colors": ["#2563EB", "#16A34A"]}, token))
+    # C5: Revenue & Gross Profit Trend — Combo
+    ids.append(card("C5 · Revenue & Gross Profit Trend by Quarter",
+        "SELECT period_key AS \"Period\", ROUND(MAX(CASE WHEN kpi_name='revenue' THEN value END)/1000000.0,2) AS \"Revenue ($M)\", ROUND(MAX(CASE WHEN kpi_name='gross_profit' THEN value END)/1000000.0,2) AS \"Gross Profit ($M)\" FROM mart.kpi_snapshot WHERE dimension='overall' AND kpi_name IN ('revenue','gross_profit') AND period_key BETWEEN '2011Q2' AND '2014Q2' GROUP BY period_key ORDER BY period_key",
+        "combo", desc="Revenue = bar, Gross Profit = line",
+        viz={"series_settings": {"Revenue ($M)": {"display": "bar"}, "Gross Profit ($M)": {"display": "line"}}, "graph.colors": ["#2563EB", "#16A34A"]}, token=token))
 
     # C6: Gross Margin % Trend
-    d1_cards_def.append(make_card(
-        "D1-C6 Gross Margin % Trend",
-        "SELECT period_key AS \"Period\", ROUND(value, 2) AS \"Gross Margin (%)\"\n"
-        "FROM mart.kpi_snapshot\n"
-        "WHERE kpi_name = 'gross_margin_pct'\n"
-        "  AND dimension = 'overall'\n"
-        "  AND period_key BETWEEN '2011Q2' AND '2014Q2'\n"
-        "ORDER BY period_key;",
-        db_id, "line", "Gross margin trend",
-        {"graph.colors": ["#F59E0B"]}, token))
+    ids.append(card("C6 · Gross Margin % Trend by Quarter",
+        "SELECT period_key AS \"Period\", ROUND(value,2) AS \"Gross Margin (%)\" FROM mart.kpi_snapshot WHERE kpi_name='gross_margin_pct' AND dimension='overall' AND period_key BETWEEN '2011Q2' AND '2014Q2' ORDER BY period_key",
+        "line", viz={"graph.colors": ["#7C3AED"]}, token=token))
 
-    # C7: Revenue by Product Category 2014Q2
-    d1_cards_def.append(make_card(
-        "D1-C7 Revenue by Product Category (2014Q2)",
-        "SELECT dimension_value AS \"Category\", ROUND(value / 1000000.0, 2) AS \"Revenue ($M)\"\n"
-        "FROM mart.kpi_snapshot\n"
-        "WHERE kpi_name = 'revenue_by_category'\n"
-        "  AND period_key = '2014Q2'\n"
-        "ORDER BY value DESC;",
-        db_id, "bar", "Revenue by category in Q2 2014",
-        {"graph.colors": ["#2563EB"]}, token))
+    # C7: Revenue by Category
+    ids.append(card("C7 · Revenue by Category — " + P,
+        f"SELECT dimension_value AS \"Category\", ROUND(value/1000000.0,2) AS \"Revenue ($M)\" FROM mart.kpi_snapshot WHERE kpi_name='revenue_by_category' AND period_key='{P}' ORDER BY value DESC",
+        "bar", viz={"graph.colors": {"Bikes": "#2563EB", "Components": "#7C3AED", "Clothing": "#EC4899", "Accessories": "#14B8A6"}}, token=token))
 
-    # C8: Contribution by Category
-    d1_cards_def.append(make_card(
-        "D1-C8 Contribution by Category (2014Q2 vs 2014Q1)",
-        "SELECT\n"
-        "    dimension_value AS \"Category\",\n"
-        "    ROUND(contribution_pct, 2) AS \"Contribution (%)\",\n"
-        "    ROUND(pct_change, 2) AS \"Change (%)\"\n"
-        "FROM mart.period_comparison\n"
-        "WHERE kpi_name = 'revenue'\n"
-        "  AND dimension = 'category'\n"
-        "  AND curr_period_key = '2014Q2'\n"
-        "ORDER BY ABS(contribution_pct) DESC;",
-        db_id, "bar", "Category contribution to revenue change",
-        {"graph.colors": ["#2563EB", "#DC2626"]}, token))
+    # C8: Contribution by Category (horizontal bar)
+    ids.append(card("C8 · Revenue Change Contribution by Category — " + P + " vs " + Q,
+        f"SELECT dimension_value AS \"Category\", ROUND(contribution_pct,2) AS \"Contribution (%)\", ROUND(pct_change,2) AS \"Change (%)\" FROM mart.period_comparison WHERE kpi_name='revenue' AND curr_period_key='{P}' AND dimension='category' ORDER BY contribution_pct ASC",
+        "row", viz={"graph.colors": ["#DC2626", "#16A34A"]}, token=token))
 
-    # C9: Contribution by Territory
-    d1_cards_def.append(make_card(
-        "D1-C9 Contribution by Territory (2014Q2 vs 2014Q1)",
-        "SELECT\n"
-        "    dimension_value AS \"Territory\",\n"
-        "    ROUND(contribution_pct, 2) AS \"Contribution (%)\",\n"
-        "    ROUND(pct_change, 2) AS \"Change (%)\"\n"
-        "FROM mart.period_comparison\n"
-        "WHERE kpi_name = 'revenue'\n"
-        "  AND dimension = 'territory'\n"
-        "  AND curr_period_key = '2014Q2'\n"
-        "ORDER BY ABS(contribution_pct) DESC\n"
-        "LIMIT 10;",
-        db_id, "bar", "Territory contribution to revenue change",
-        {"graph.colors": ["#2563EB", "#DC2626"]}, token))
+    # C9: Contribution by Territory (horizontal bar)
+    ids.append(card("C9 · Revenue Change Contribution by Territory — " + P + " vs " + Q,
+        f"SELECT dimension_value AS \"Territory\", ROUND(contribution_pct,2) AS \"Contribution (%)\", ROUND(pct_change,2) AS \"Change (%)\" FROM mart.period_comparison WHERE kpi_name='revenue' AND curr_period_key='{P}' AND dimension='territory' ORDER BY ABS(contribution_pct) DESC LIMIT 10",
+        "row", viz={"graph.colors": ["#DC2626", "#16A34A"]}, token=token))
 
-    # C10: KPI Comparison Table
-    d1_cards_def.append(make_card(
-        "D1-C10 KPI Comparison Table (2014Q2 vs 2014Q1)",
-        "SELECT\n"
-        "    kpi_name AS \"KPI\",\n"
-        "    ROUND(MAX(CASE WHEN period_key = '2014Q2' THEN value END), 2) AS \"2014Q2\",\n"
-        "    ROUND(MAX(CASE WHEN period_key = '2014Q1' THEN value END), 2) AS \"2014Q1\",\n"
-        "    ROUND(MAX(CASE WHEN period_key = '2014Q2' THEN value END) - MAX(CASE WHEN period_key = '2014Q1' THEN value END), 2) AS \"Abs Change\",\n"
-        "    ROUND(\n"
-        "        CASE\n"
-        "            WHEN MAX(CASE WHEN period_key = '2014Q1' THEN value END) <> 0\n"
-        "            THEN (\n"
-        "                MAX(CASE WHEN period_key = '2014Q2' THEN value END)\n"
-        "                - MAX(CASE WHEN period_key = '2014Q1' THEN value END)\n"
-        "            ) * 100.0 / MAX(CASE WHEN period_key = '2014Q1' THEN value END)\n"
-        "            ELSE NULL\n"
-        "        END,\n"
-        "        2\n"
-        "    ) AS \"Change (%)\"\n"
-        "FROM mart.kpi_snapshot\n"
-        "WHERE period_key IN ('2014Q1', '2014Q2')\n"
-        "  AND dimension = 'overall'\n"
-        "  AND kpi_name IN ('revenue','gross_profit','gross_margin_pct','order_count',\n"
-        "                   'total_customers','avg_order_value','revenue_per_customer')\n"
-        "GROUP BY kpi_name\n"
-        "ORDER BY kpi_name;",
-        db_id, "table", "KPI comparison", {}, token))
+    # C10: KPI Comparison Table (use kpi_snapshot since period_comparison has no 'overall' dimension)
+    ids.append(card("C10 · KPI Comparison — " + P + " vs " + Q,
+        f"SELECT kpi_name AS \"KPI\", ROUND(MAX(CASE WHEN period_key='{P}' THEN value END),2) AS \"{P}\", ROUND(MAX(CASE WHEN period_key='{Q}' THEN value END),2) AS \"{Q}\", ROUND(MAX(CASE WHEN period_key='{P}' THEN value END)-MAX(CASE WHEN period_key='{Q}' THEN value END),2) AS \"Δ\", ROUND(CASE WHEN MAX(CASE WHEN period_key='{Q}' THEN value END)<>0 THEN (MAX(CASE WHEN period_key='{P}' THEN value END)-MAX(CASE WHEN period_key='{Q}' THEN value END))*100.0/MAX(CASE WHEN period_key='{Q}' THEN value END) ELSE NULL END,2) AS \"Δ %\" FROM mart.kpi_snapshot WHERE period_key IN ('{P}','{Q}') AND dimension='overall' AND kpi_name IN ('revenue','gross_profit','gross_margin_pct','order_count','total_customers','avg_order_value','revenue_per_customer') GROUP BY kpi_name ORDER BY kpi_name",
+        "table", viz={}, token=token))
 
-    # Build Dashboard 1
-    d1 = make_dashboard("Business Performance Overview",
-        "Period-based KPI snapshot, trend by quarter, comparison 2014Q2 vs 2014Q1, contribution/root-cause analysis. "
-        "Data source: mart.kpi_snapshot, mart.period_comparison.", token)
+    # Build dashboard
+    d1 = dashboard("Business Performance Overview",
+        "KPI snapshot theo quý, trend, root-cause contribution. Source: mart.kpi_snapshot, mart.period_comparison.", token)
     if d1:
         add_cards(d1, [
-            {"card_id": d1_cards_def[0], "row": 0, "col": 0, "size_x": 3, "size_y": 2},
-            {"card_id": d1_cards_def[1], "row": 0, "col": 3, "size_x": 3, "size_y": 2},
-            {"card_id": d1_cards_def[2], "row": 0, "col": 6, "size_x": 3, "size_y": 2},
-            {"card_id": d1_cards_def[3], "row": 0, "col": 9, "size_x": 3, "size_y": 2},
-            {"card_id": d1_cards_def[4], "row": 2, "col": 0, "size_x": 12, "size_y": 5},
-            {"card_id": d1_cards_def[5], "row": 7, "col": 0, "size_x": 6, "size_y": 4},
-            {"card_id": d1_cards_def[6], "row": 7, "col": 6, "size_x": 6, "size_y": 4},
-            {"card_id": d1_cards_def[7], "row": 11, "col": 0, "size_x": 6, "size_y": 4},
-            {"card_id": d1_cards_def[8], "row": 11, "col": 6, "size_x": 6, "size_y": 4},
-            {"card_id": d1_cards_def[9], "row": 15, "col": 0, "size_x": 12, "size_y": 4},
+            # Row 0: Text heading
+            {"card_id": ids[0], "row": 0, "col": 0, "size_x": 24, "size_y": 2},
+            # Row 1: 4 scalar
+            {"card_id": ids[1], "row": 2, "col": 0, "size_x": 6, "size_y": 3},
+            {"card_id": ids[2], "row": 2, "col": 6, "size_x": 6, "size_y": 3},
+            {"card_id": ids[3], "row": 2, "col": 12, "size_x": 6, "size_y": 3},
+            {"card_id": ids[4], "row": 2, "col": 18, "size_x": 6, "size_y": 3},
+            # Row 2: Combo full
+            {"card_id": ids[5], "row": 5, "col": 0, "size_x": 24, "size_y": 6},
+            # Row 3: Line + Bar
+            {"card_id": ids[6], "row": 11, "col": 0, "size_x": 12, "size_y": 6},
+            {"card_id": ids[7], "row": 11, "col": 12, "size_x": 12, "size_y": 6},
+            # Row 4: Horizontal bars
+            {"card_id": ids[8], "row": 17, "col": 0, "size_x": 12, "size_y": 6},
+            {"card_id": ids[9], "row": 17, "col": 12, "size_x": 12, "size_y": 6},
+            # Row 5: Table full
+            {"card_id": ids[10], "row": 23, "col": 0, "size_x": 24, "size_y": 6},
         ], token)
         log(f"Dashboard 1 created: id={d1}")
+    return d1, ids
 
-    # ────────── DASHBOARD 2: Product & Customer Analytics ──────────
+# ══════════════════════════════════════════════════════════════════════
+# DASHBOARD 2: Product & Customer Analytics
+# ══════════════════════════════════════════════════════════════════════
+def build_d2(token):
     log("\n=== Dashboard 2: Product & Customer Analytics ===")
+    ids = []
 
-    d2_cards_def = []
+    # Text heading
+    ids.append(text_card("D2-H · Product & Customer Analytics",
+        "## 🛒 Product & Customer Analytics\n\n"
+        "RFM Segmentation (K-Means K=3), Product ABC classification, Customer behavior.  "
+        "**Source:** dw.ml_customer_segments, mart.rfm_snapshot, dw.fact_sales", token))
 
     # C1: Active Customers
-    d2_cards_def.append(make_card(
-        "D2-C1 Active Customers (2014Q2)",
-        "SELECT COUNT(DISTINCT f.customer_key) AS \"Active Customers\"\n"
-        "FROM dw.fact_sales f\n"
-        "JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30';",
-        db_id, "scalar", "Active customers in Q2 2014", {}, token))
+    ids.append(card("C1 · Active Customers — " + P,
+        "SELECT COUNT(DISTINCT f.customer_key) AS \"Active Customers\" FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'",
+        "scalar", token=token))
 
     # C2: Active Products
-    d2_cards_def.append(make_card(
-        "D2-C2 Active Products (2014Q2)",
-        "SELECT COUNT(DISTINCT f.product_key) AS \"Active Products\"\n"
-        "FROM dw.fact_sales f\n"
-        "JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30';",
-        db_id, "scalar", "Active products in Q2 2014", {}, token))
+    ids.append(card("C2 · Active Products — " + P,
+        "SELECT COUNT(DISTINCT f.product_key) AS \"Active Products\" FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'",
+        "scalar", token=token))
 
     # C3: Units Sold
-    d2_cards_def.append(make_card(
-        "D2-C3 Units Sold (2014Q2)",
-        "SELECT SUM(f.order_qty) AS \"Units Sold\"\n"
-        "FROM dw.fact_sales f\n"
-        "JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30';",
-        db_id, "scalar", "Total units sold", {}, token))
+    ids.append(card("C3 · Units Sold — " + P,
+        "SELECT SUM(f.order_qty) AS \"Units Sold\" FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'",
+        "scalar", token=token))
 
-    # C4: Avg Revenue per Customer
-    d2_cards_def.append(make_card(
-        "D2-C4 Avg Revenue per Customer (2014Q2)",
-        "SELECT ROUND(SUM(f.line_total) / NULLIF(COUNT(DISTINCT f.customer_key), 0), 2) AS \"Avg Revenue per Customer\"\n"
-        "FROM dw.fact_sales f\n"
-        "JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30';",
-        db_id, "scalar", "Average revenue per customer", {}, token))
+    # C4: Revenue / Customer
+    ids.append(card("C4 · Revenue per Customer — " + P,
+        "SELECT ROUND(SUM(f.line_total)/NULLIF(COUNT(DISTINCT f.customer_key),0),2) AS \"Revenue/Customer\" FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'",
+        "scalar", token=token))
 
     # C5: Customer Segments — RFM K-Means (K=3)
-    d2_cards_def.append(make_card(
-        "D2-C5 Customer Segments — RFM K-Means",
-        "SELECT\n"
-        "    cluster_label AS \"Customer Segment\",\n"
-        "    COUNT(*) AS \"Customer Count\",\n"
-        "    ROUND(AVG(monetary), 2) AS \"Avg Monetary\",\n"
-        "    ROUND(AVG(recency_days), 2) AS \"Avg Recency\",\n"
-        "    ROUND(AVG(frequency), 2) AS \"Avg Frequency\"\n"
-        "FROM dw.ml_customer_segments\n"
-        "GROUP BY cluster_label\n"
-        "ORDER BY \"Customer Count\" DESC;",
-        db_id, "bar", "RFM customer segments from K-Means (K=3)",
-        {"graph.colors": ["#7C3AED"]}, token))
+    ids.append(card("C5 · Customer Segments — RFM K-Means (K=3)",
+        "SELECT cluster_label AS \"Segment\", COUNT(*) AS \"Customers\", ROUND(SUM(monetary),0) AS \"Total ($)\" FROM dw.ml_customer_segments GROUP BY cluster_label ORDER BY \"Customers\" DESC",
+        "bar", desc="K=3, silhouette≈0.48",
+        viz={"graph.colors": {"Champions": "#F59E0B", "Loyal Customers": "#2563EB", "Potential Loyalists": "#10B981"}}, token=token))
 
     # C6: RFM Segment Details
-    d2_cards_def.append(make_card(
-        "D2-C6 RFM Segment Details",
-        "SELECT\n"
-        "    cluster_label AS \"Customer Segment\",\n"
-        "    COUNT(*) AS \"Customers\",\n"
-        "    ROUND(AVG(recency_days), 0) AS \"Avg Recency Days\",\n"
-        "    ROUND(AVG(frequency), 0) AS \"Avg Frequency\",\n"
-        "    ROUND(AVG(monetary), 2) AS \"Avg Monetary\",\n"
-        "    ROUND(SUM(monetary), 2) AS \"Total Monetary\",\n"
-        "    ROUND(MAX(silhouette_score), 4) AS \"Silhouette Score\"\n"
-        "FROM dw.ml_customer_segments\n"
-        "GROUP BY cluster_label\n"
-        "ORDER BY \"Total Monetary\" DESC;",
-        db_id, "table", "Detailed RFM metrics per segment", {}, token))
+    ids.append(card("C6 · RFM Segment Details",
+        "SELECT cluster_label AS \"Segment\", COUNT(*) AS \"Customers\", ROUND(AVG(recency_days),1) AS \"Avg Recency (d)\", ROUND(AVG(frequency),1) AS \"Avg Frequency\", ROUND(AVG(monetary),2) AS \"Avg Monetary\" FROM dw.ml_customer_segments GROUP BY cluster_label ORDER BY \"Customers\" DESC",
+        "table", token=token))
 
     # C7: ABC Product Class
-    d2_cards_def.append(make_card(
-        "D2-C7 Revenue Share by ABC Product Class (2014Q2)",
-        "WITH product_revenue AS (\n"
-        "    SELECT p.product_key, p.name AS product_name, SUM(f.line_total) AS revenue\n"
-        "    FROM dw.fact_sales f\n"
-        "    JOIN dw.dim_product p ON f.product_key = p.product_key\n"
-        "    JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "    WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'\n"
-        "    GROUP BY p.product_key, p.name\n"
-        "),\n"
-        "ranked AS (\n"
-        "    SELECT *,\n"
-        "        SUM(revenue) OVER () AS total_revenue,\n"
-        "        SUM(revenue) OVER (ORDER BY revenue DESC ROWS UNBOUNDED PRECEDING)\n"
-        "            / NULLIF(SUM(revenue) OVER (), 0) AS cumulative_share\n"
-        "    FROM product_revenue\n"
-        "),\n"
-        "classified AS (\n"
-        "    SELECT\n"
-        "        CASE\n"
-        "            WHEN cumulative_share <= 0.80 THEN 'A - Core Products'\n"
-        "            WHEN cumulative_share <= 0.95 THEN 'B - Support Products'\n"
-        "            ELSE 'C - Long Tail'\n"
-        "        END AS abc_class,\n"
-        "        revenue\n"
-        "    FROM ranked\n"
-        ")\n"
-        "SELECT abc_class AS \"ABC Class\", ROUND(SUM(revenue) / 1000000.0, 2) AS \"Revenue ($M)\"\n"
-        "FROM classified\n"
-        "GROUP BY abc_class\n"
-        "ORDER BY \"Revenue ($M)\" DESC;",
-        db_id, "bar", "ABC product classification by revenue share",
-        {"graph.colors": ["#2563EB", "#F59E0B", "#64748B"]}, token))
+    ids.append(card("C7 · Revenue Share by ABC Product Class — " + P,
+        "WITH prod AS (SELECT p.product_key, SUM(f.line_total) AS rev FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key JOIN dw.dim_product p ON f.product_key=p.product_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30' GROUP BY p.product_key), ranked AS (SELECT rev, SUM(rev) OVER (ORDER BY rev DESC) / NULLIF(SUM(rev) OVER (),0) AS cum_share FROM prod) SELECT CASE WHEN cum_share<=0.8 THEN 'A - Core' WHEN cum_share<=0.95 THEN 'B - Support' ELSE 'C - Long Tail' END AS \"ABC Class\", COUNT(*) AS \"Products\", ROUND(SUM(rev)/1000000.0,2) AS \"Revenue ($M)\" FROM ranked GROUP BY 1 ORDER BY 1",
+        "bar", viz={"graph.colors": {"A - Core": "#16A34A", "B - Support": "#F59E0B", "C - Long Tail": "#94A3B8"}}, token=token))
 
-    # C8: Top 10 Products by Revenue
-    d2_cards_def.append(make_card(
-        "D2-C8 Top 10 Products by Revenue (2014Q2)",
-        "SELECT p.name AS \"Product\", ROUND(SUM(f.line_total) / 1000000.0, 2) AS \"Revenue ($M)\"\n"
-        "FROM dw.fact_sales f\n"
-        "JOIN dw.dim_product p ON f.product_key = p.product_key\n"
-        "JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'\n"
-        "GROUP BY p.name\n"
-        "ORDER BY \"Revenue ($M)\" DESC\n"
-        "LIMIT 10;",
-        db_id, "bar", "Top 10 products by revenue",
-        {"graph.colors": ["#2563EB"]}, token))
+    # C8: Top 10 Products
+    ids.append(card("C8 · Top 10 Products by Revenue — " + P,
+        "SELECT p.name AS \"Product\", ROUND(SUM(f.line_total)/1000000.0,2) AS \"Revenue ($M)\" FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key JOIN dw.dim_product p ON f.product_key=p.product_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30' GROUP BY p.name ORDER BY \"Revenue ($M)\" DESC LIMIT 10",
+        "row", viz={"graph.colors": ["#2563EB"]}, token=token))
 
-    # C9: Top 10 Customers by Revenue
-    d2_cards_def.append(make_card(
-        "D2-C9 Top 10 Customers by Revenue (2014Q2)",
-        "SELECT\n"
-        "    c.full_name AS \"Customer\",\n"
-        "    c.customer_type AS \"Customer Type\",\n"
-        "    c.country AS \"Country\",\n"
-        "    ROUND(SUM(f.line_total) / 1000000.0, 2) AS \"Revenue ($M)\",\n"
-        "    COUNT(DISTINCT f.sales_order_id) AS \"Order Count\"\n"
-        "FROM dw.fact_sales f\n"
-        "JOIN dw.dim_customer c ON f.customer_key = c.customer_key\n"
-        "JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'\n"
-        "GROUP BY c.full_name, c.customer_type, c.country\n"
-        "ORDER BY \"Revenue ($M)\" DESC\n"
-        "LIMIT 10;",
-        db_id, "table", "Top 10 customers by revenue", {}, token))
+    # C9: Top 10 Customers
+    ids.append(card("C9 · Top 10 Customers — " + P,
+        "SELECT c.full_name AS \"Customer\", c.customer_type AS \"Type\", c.country AS \"Country\", COUNT(DISTINCT f.sales_order_id) AS \"Orders\", ROUND(SUM(f.line_total),0) AS \"Revenue\" FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key JOIN dw.dim_customer c ON f.customer_key=c.customer_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30' GROUP BY c.full_name,c.customer_type,c.country ORDER BY \"Revenue\" DESC LIMIT 10",
+        "table", token=token))
 
     # C10: Customer Segment Share by Quarter
-    d2_cards_def.append(make_card(
-        "D2-C10 Customer Segment Share by Quarter",
-        "SELECT\n"
-        "    period_key AS \"Period\",\n"
-        "    cluster_label AS \"Customer Segment\",\n"
-        "    ROUND(pct_of_total, 2) AS \"Share (%)\"\n"
-        "FROM mart.rfm_snapshot\n"
-        "WHERE period_key BETWEEN '2013Q1' AND '2014Q2'\n"
-        "ORDER BY period_key, cluster_label;",
-        db_id, "line", "RFM segment share over time",
-        {"graph.colors": ["#7C3AED", "#2563EB", "#16A34A"]}, token))
+    ids.append(card("C10 · Customer Segment Share by Quarter",
+        "SELECT period_key AS \"Period\", cluster_label AS \"Segment\", ROUND(pct_of_total,2) AS \"Share (%)\" FROM mart.rfm_snapshot WHERE period_key BETWEEN '2013Q1' AND '2014Q2' ORDER BY period_key, cluster_label",
+        "line", viz={"graph.colors": {"Champions": "#F59E0B", "Loyal Customers": "#2563EB", "Potential Loyalists": "#10B981"}}, token=token))
 
-    # C11: Revenue by Customer Type
-    d2_cards_def.append(make_card(
-        "D2-C11 Revenue by Customer Type (2014Q2)",
-        "SELECT c.customer_type AS \"Customer Type\", ROUND(SUM(f.line_total) / 1000000.0, 2) AS \"Revenue ($M)\"\n"
-        "FROM dw.fact_sales f\n"
-        "JOIN dw.dim_customer c ON f.customer_key = c.customer_key\n"
-        "JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'\n"
-        "GROUP BY c.customer_type\n"
-        "ORDER BY \"Revenue ($M)\" DESC;",
-        db_id, "pie", "Revenue distribution by customer type",
-        {"pie.colors": {"Individual": "#2563EB", "Store": "#16A34A"}}, token))
+    # C11: Revenue by Territory — Donut
+    ids.append(card("C11 · Revenue by Territory — " + P,
+        "SELECT t.territory_name AS \"Territory\", ROUND(SUM(f.line_total)/1000000.0,2) AS \"Revenue ($M)\" FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key JOIN dw.dim_territory t ON f.territory_key=t.territory_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30' GROUP BY t.territory_name ORDER BY \"Revenue ($M)\" DESC",
+        "pie", viz={"pie.show_total": True, "pie.show_legend": True, "pie.colors": {}}, token=token))
 
-    # C12: Gross Margin % by Product Category
-    d2_cards_def.append(make_card(
-        "D2-C12 Gross Margin % by Product Category (2014Q2)",
-        "SELECT\n"
-        "    p.category AS \"Category\",\n"
-        "    ROUND(SUM(f.gross_profit)::numeric / NULLIF(SUM(f.line_total), 0) * 100, 2) AS \"Gross Margin (%)\"\n"
-        "FROM dw.fact_sales f\n"
-        "JOIN dw.dim_product p ON f.product_key = p.product_key\n"
-        "JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'\n"
-        "GROUP BY p.category\n"
-        "ORDER BY \"Gross Margin (%)\" DESC;",
-        db_id, "bar", "Gross margin by category",
-        {"graph.colors": ["#16A34A"]}, token))
+    # C12: Revenue Heatmap — Customer Type × Category (pivoted SQL → table + color-scale)
+    ids.append(card("C12 · Revenue Heatmap — Customer Type × Category (" + P + ")",
+        "SELECT c.customer_type AS \"Customer Type\", ROUND(SUM(f.line_total) FILTER (WHERE p.category='Bikes')/1e6,3) AS \"Bikes\", ROUND(SUM(f.line_total) FILTER (WHERE p.category='Components')/1e6,3) AS \"Components\", ROUND(SUM(f.line_total) FILTER (WHERE p.category='Clothing')/1e6,3) AS \"Clothing\", ROUND(SUM(f.line_total) FILTER (WHERE p.category='Accessories')/1e6,3) AS \"Accessories\" FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key JOIN dw.dim_customer c ON f.customer_key=c.customer_key JOIN dw.dim_product p ON f.product_key=p.product_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30' GROUP BY c.customer_type",
+        "table", viz={"table.column_formatting": [{"columns": ["Bikes", "Components", "Clothing", "Accessories"], "type": "color", "color_condition": "not_null", "color": "#2563EB"}]}, token=token))
 
-    # C13: Average Cost vs Selling Price
-    d2_cards_def.append(make_card(
-        "D2-C13 Average Cost vs Selling Price by Product",
-        "SELECT\n"
-        "    p.name AS \"Product\",\n"
-        "    p.category AS \"Category\",\n"
-        "    ROUND(AVG(f.standard_cost), 2) AS \"Standard Cost\",\n"
-        "    ROUND(AVG(f.unit_price), 2) AS \"Average Selling Price\",\n"
-        "    ROUND(SUM(f.line_total) / 1000000.0, 2) AS \"Revenue ($M)\"\n"
-        "FROM dw.fact_sales f\n"
-        "JOIN dw.dim_product p ON f.product_key = p.product_key\n"
-        "JOIN dw.dim_date d ON f.date_key = d.date_key\n"
-        "WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30'\n"
-        "GROUP BY p.name, p.category\n"
-        "HAVING SUM(f.line_total) > 0\n"
-        "ORDER BY \"Revenue ($M)\" DESC\n"
-        "LIMIT 100;",
-        db_id, "scatter", "Cost vs selling price scatter", {}, token))
+    # C13: Gross Margin % by Category
+    ids.append(card("C13 · Gross Margin % by Category — " + P,
+        "SELECT p.category AS \"Category\", ROUND(SUM(f.gross_profit)/NULLIF(SUM(f.line_total),0)*100,1) AS \"Gross Margin (%)\" FROM dw.fact_sales f JOIN dw.dim_date d ON f.date_key=d.date_key JOIN dw.dim_product p ON f.product_key=p.product_key WHERE d.date BETWEEN '2014-04-01' AND '2014-06-30' GROUP BY p.category ORDER BY \"Gross Margin (%)\" DESC",
+        "bar", viz={"graph.colors": {"Bikes": "#2563EB", "Components": "#7C3AED", "Clothing": "#EC4899", "Accessories": "#14B8A6"}}, token=token))
 
-    d2 = make_dashboard("Product & Customer Analytics",
-        "Product performance, ABC analysis, customer segmentation ML. "
-        "Data source: dw.fact_sales, dw.ml_customer_segments, mart.rfm_snapshot.", token)
+    # C14: Cost vs Selling Price — Scatter
+    ids.append(card("C14 · Cost vs Selling Price by Product",
+        "SELECT p.name AS \"Product\", p.category AS \"Category\", p.standard_cost AS \"Cost\", p.list_price AS \"Price\", ROUND(SUM(f.line_total)/1000000.0,2) AS \"Revenue ($M)\" FROM dw.dim_product p JOIN dw.fact_sales f ON p.product_key=f.product_key WHERE p.is_current AND p.list_price>0 GROUP BY p.name, p.category, p.standard_cost, p.list_price ORDER BY \"Revenue ($M)\" DESC LIMIT 100",
+        "scatter", viz={"graph.dimensions": ["Cost"], "graph.metrics": ["Price"]}, token=token))
+
+    d2 = dashboard("Product & Customer Analytics",
+        "RFM segmentation (K=3), ABC classification, customer behavior. Source: dw.ml_customer_segments, mart.rfm_snapshot, dw.fact_sales.", token)
     if d2:
         add_cards(d2, [
-            {"card_id": d2_cards_def[0], "row": 0, "col": 0, "size_x": 3, "size_y": 2},
-            {"card_id": d2_cards_def[1], "row": 0, "col": 3, "size_x": 3, "size_y": 2},
-            {"card_id": d2_cards_def[2], "row": 0, "col": 6, "size_x": 3, "size_y": 2},
-            {"card_id": d2_cards_def[3], "row": 0, "col": 9, "size_x": 3, "size_y": 2},
-            {"card_id": d2_cards_def[4], "row": 2, "col": 0, "size_x": 6, "size_y": 5},
-            {"card_id": d2_cards_def[5], "row": 2, "col": 6, "size_x": 6, "size_y": 5},
-            {"card_id": d2_cards_def[6], "row": 7, "col": 0, "size_x": 6, "size_y": 4},
-            {"card_id": d2_cards_def[7], "row": 7, "col": 6, "size_x": 6, "size_y": 4},
-            {"card_id": d2_cards_def[8], "row": 11, "col": 0, "size_x": 12, "size_y": 5},
-            {"card_id": d2_cards_def[9], "row": 16, "col": 0, "size_x": 6, "size_y": 4},
-            {"card_id": d2_cards_def[10], "row": 16, "col": 6, "size_x": 6, "size_y": 4},
-            {"card_id": d2_cards_def[11], "row": 20, "col": 0, "size_x": 6, "size_y": 4},
-            {"card_id": d2_cards_def[12], "row": 20, "col": 6, "size_x": 6, "size_y": 4},
+            {"card_id": ids[0], "row": 0, "col": 0, "size_x": 24, "size_y": 2},
+            {"card_id": ids[1], "row": 2, "col": 0, "size_x": 6, "size_y": 3},
+            {"card_id": ids[2], "row": 2, "col": 6, "size_x": 6, "size_y": 3},
+            {"card_id": ids[3], "row": 2, "col": 12, "size_x": 6, "size_y": 3},
+            {"card_id": ids[4], "row": 2, "col": 18, "size_x": 6, "size_y": 3},
+            {"card_id": ids[5], "row": 5, "col": 0, "size_x": 12, "size_y": 6},
+            {"card_id": ids[6], "row": 5, "col": 12, "size_x": 12, "size_y": 6},
+            {"card_id": ids[7], "row": 11, "col": 0, "size_x": 12, "size_y": 6},
+            {"card_id": ids[8], "row": 11, "col": 12, "size_x": 12, "size_y": 6},
+            {"card_id": ids[9], "row": 17, "col": 0, "size_x": 24, "size_y": 6},
+            {"card_id": ids[10], "row": 23, "col": 0, "size_x": 12, "size_y": 6},
+            {"card_id": ids[11], "row": 23, "col": 12, "size_x": 12, "size_y": 6},
+            {"card_id": ids[12], "row": 29, "col": 0, "size_x": 24, "size_y": 6},
+            {"card_id": ids[13], "row": 35, "col": 0, "size_x": 12, "size_y": 6},
+            {"card_id": ids[14], "row": 35, "col": 12, "size_x": 12, "size_y": 6},
         ], token)
         log(f"Dashboard 2 created: id={d2}")
+    return d2, ids
 
-    # ────────── DASHBOARD 3: Inventory & Operational Decision Support ──────────
+# ══════════════════════════════════════════════════════════════════════
+# DASHBOARD 3: Inventory & Operational Decision Support
+# ══════════════════════════════════════════════════════════════════════
+def build_d3(token):
     log("\n=== Dashboard 3: Inventory & Operational Decision Support ===")
+    ids = []
 
-    d3_cards_def = []
+    # Text heading
+    ids.append(text_card("D3-H · Inventory & Operational Decision Support",
+        "## 📦 Inventory & Operational Decision Support\n\n"
+        "Inventory Risk / Zero-Sales Warning, Decision Support actions.  "
+        "**Source:** dw.ml_inventory_anomaly, dw.decision_support, dw.fact_inventory  |  "
+        "**Wording:** Risk / Zero-Sales Warning (anomaly_flag = 0)", token))
 
     # C1: Inventory Risk Products
-    d3_cards_def.append(make_card(
-        "D3-C1 Inventory Risk Products",
-        "SELECT COUNT(*) AS \"Inventory Risk Products\"\n"
-        "FROM dw.ml_inventory_anomaly\n"
-        "WHERE anomaly_flag = true OR zero_sales_flag = true;",
-        db_id, "scalar", "Total flagged inventory products", {}, token))
+    ids.append(card("C1 · Inventory Risk Products",
+        "SELECT COUNT(*) AS \"Risk Products\" FROM dw.ml_inventory_anomaly WHERE anomaly_flag = true OR zero_sales_flag = true",
+        "scalar", viz={"scalar.field": "Risk Products"}, token=token))
 
     # C2: Zero-Sales Warnings
-    d3_cards_def.append(make_card(
-        "D3-C2 Zero-Sales Warnings",
-        "SELECT COUNT(*) AS \"Zero-Sales Warnings\"\n"
-        "FROM dw.ml_inventory_anomaly\n"
-        "WHERE zero_sales_flag = true;",
-        db_id, "scalar", "Products with zero sales", {}, token))
+    ids.append(card("C2 · Zero-Sales Warnings",
+        "SELECT COUNT(*) AS \"Zero-Sales\" FROM dw.ml_inventory_anomaly WHERE zero_sales_flag = true",
+        "scalar", viz={"scalar.field": "Zero-Sales"}, token=token))
 
-    # C3: High Priority Actions
-    d3_cards_def.append(make_card(
-        "D3-C3 High Priority Actions",
-        "SELECT COUNT(*) AS \"High Priority Actions\"\n"
-        "FROM dw.decision_support\n"
-        "WHERE priority = 'HIGH';",
-        db_id, "scalar", "HIGH priority decision support actions", {}, token))
+    # C3: High-Priority Actions
+    ids.append(card("C3 · High-Priority Actions",
+        "SELECT COUNT(*) AS \"High Priority\" FROM dw.decision_support WHERE priority='HIGH'",
+        "scalar", viz={"scalar.field": "High Priority"}, token=token))
 
-    # C4: Inventory Value
-    d3_cards_def.append(make_card(
-        "D3-C4 Inventory Value",
-        "SELECT ROUND(SUM(i.quantity * p.standard_cost) / 1000000.0, 2) AS \"Inventory Value ($M)\"\n"
-        "FROM dw.fact_inventory i\n"
-        "JOIN dw.dim_product p ON i.product_key = p.product_key;",
-        db_id, "scalar", "Total inventory value", {}, token))
+    # C4: Total Inventory Value
+    ids.append(card("C4 · Total Inventory Value",
+        "SELECT ROUND(SUM(inventory_value),0) AS \"Inv Value ($)\" FROM dw.ml_inventory_anomaly",
+        "scalar", viz={"scalar.field": "Inv Value ($)"}, token=token))
 
-    # C5: Inventory Risk Flags Table
-    d3_cards_def.append(make_card(
-        "D3-C5 Inventory Risk Flags — Zero-Sales & Slow-Moving Products",
-        "SELECT\n"
-        "    product_name AS \"Product\",\n"
-        "    category AS \"Category\",\n"
-        "    subcategory AS \"Subcategory\",\n"
-        "    ROUND(days_inventory_outstanding, 1) AS \"DIO Days\",\n"
-        "    ROUND(inventory_value / 1000000.0, 2) AS \"Inventory Value ($M)\",\n"
-        "    ROUND(anomaly_score, 4) AS \"Risk Score\",\n"
-        "    CASE\n"
-        "        WHEN anomaly_flag = true THEN 'Anomaly'\n"
-        "        WHEN zero_sales_flag = true THEN 'Zero-Sales Warning'\n"
-        "        ELSE 'Slow-Moving Warning'\n"
-        "    END AS \"Risk Type\"\n"
-        "FROM dw.ml_inventory_anomaly\n"
-        "WHERE anomaly_flag = true\n"
-        "   OR zero_sales_flag = true\n"
-        "   OR days_inventory_outstanding >= 180\n"
-        "ORDER BY\n"
-        "    CASE\n"
-        "        WHEN anomaly_flag = true THEN 1\n"
-        "        WHEN zero_sales_flag = true THEN 2\n"
-        "        ELSE 3\n"
-        "    END,\n"
-        "    days_inventory_outstanding DESC,\n"
-        "    inventory_value DESC\n"
-        "LIMIT 30;",
-        db_id, "table", "Inventory risk flagged products", {}, token))
+    # C5: Risk Flags Table
+    ids.append(card("C5 · Zero-Sales & Slow-Moving Products",
+        "SELECT product_name AS \"Product\", category AS \"Category\", ROUND(inventory_value,0) AS \"Inv Value\", units_sold AS \"Units Sold\", ROUND(days_inventory_outstanding,0) AS \"DIO\", CASE WHEN zero_sales_flag THEN 'Zero-Sales' ELSE 'Slow-Moving' END AS \"Risk\" FROM dw.ml_inventory_anomaly WHERE zero_sales_flag OR days_inventory_outstanding>=180 ORDER BY days_inventory_outstanding DESC, inventory_value DESC LIMIT 50",
+        "table", viz={}, token=token))
 
-    # C6: Inventory Risk Count by Category
-    d3_cards_def.append(make_card(
-        "D3-C6 Inventory Risk Count by Category",
-        "SELECT category AS \"Category\", COUNT(*) AS \"Risk Products\"\n"
-        "FROM dw.ml_inventory_anomaly\n"
-        "WHERE anomaly_flag = true OR zero_sales_flag = true OR days_inventory_outstanding >= 180\n"
-        "GROUP BY category\n"
-        "ORDER BY \"Risk Products\" DESC;",
-        db_id, "bar", "Risk count by category",
-        {"graph.colors": ["#DC2626"]}, token))
+    # C6: Risk Count by Category
+    ids.append(card("C6 · Inventory Risk Count by Category",
+        "SELECT category AS \"Category\", COUNT(*) FILTER (WHERE zero_sales_flag) AS \"Zero-Sales\", ROUND(AVG(days_inventory_outstanding),1) AS \"Avg DIO\" FROM dw.ml_inventory_anomaly GROUP BY category ORDER BY \"Zero-Sales\" DESC",
+        "bar", viz={"graph.colors": ["#F59E0B", "#DC2626"]}, token=token))
 
-    # C7: Inventory Value by Category
-    d3_cards_def.append(make_card(
-        "D3-C7 Inventory Value by Category",
-        "SELECT\n"
-        "    p.category AS \"Category\",\n"
-        "    ROUND(SUM(i.quantity * p.standard_cost) / 1000000.0, 2) AS \"Inventory Value ($M)\",\n"
-        "    SUM(i.quantity) AS \"Inventory Units\"\n"
-        "FROM dw.fact_inventory i\n"
-        "JOIN dw.dim_product p ON i.product_key = p.product_key\n"
-        "GROUP BY p.category\n"
-        "ORDER BY \"Inventory Value ($M)\" DESC;",
-        db_id, "bar", "Inventory value by category",
-        {"graph.colors": ["#2563EB"]}, token))
+    # C7: Inventory Value by Category (horizontal bar)
+    ids.append(card("C7 · Inventory Value by Category",
+        "SELECT category AS \"Category\", ROUND(SUM(inventory_value),0) AS \"Inv Value\" FROM dw.ml_inventory_anomaly GROUP BY category ORDER BY \"Inv Value\" DESC",
+        "row", viz={"graph.colors": {"Bikes": "#2563EB", "Components": "#7C3AED", "Clothing": "#EC4899", "Accessories": "#14B8A6", "Unknown": "#94A3B8"}}, token=token))
 
-    # C8: DIO vs Inventory Value Scatter
-    d3_cards_def.append(make_card(
-        "D3-C8 DIO vs Inventory Value — Risk Map",
-        "SELECT\n"
-        "    product_name AS \"Product\",\n"
-        "    category AS \"Category\",\n"
-        "    ROUND(days_inventory_outstanding, 1) AS \"DIO Days\",\n"
-        "    ROUND(inventory_value / 1000000.0, 2) AS \"Inventory Value ($M)\",\n"
-        "    CASE\n"
-        "        WHEN anomaly_flag = true THEN 'Anomaly'\n"
-        "        WHEN zero_sales_flag = true THEN 'Zero-Sales Warning'\n"
-        "        ELSE 'Normal / Low Risk'\n"
-        "    END AS \"Risk Type\"\n"
-        "FROM dw.ml_inventory_anomaly\n"
-        "WHERE inventory_value > 0\n"
-        "ORDER BY inventory_value DESC;",
-        db_id, "scatter", "DIO vs inventory value risk scatter", {}, token))
+    # C8: DIO vs Value — Bubble Chart
+    ids.append(card("C8 · DIO vs Inventory Value — Risk Map",
+        "SELECT product_name AS \"Product\", category AS \"Category\", inventory_value AS \"Inv Value\", days_inventory_outstanding AS \"DIO\", avg_quantity AS \"Avg Qty\", CASE WHEN zero_sales_flag THEN 'Zero-Sales' ELSE 'Has-Sales' END AS \"Status\" FROM dw.ml_inventory_anomaly WHERE inventory_value>0 ORDER BY inventory_value DESC",
+        "scatter", viz={"graph.dimensions": ["Inv Value"], "graph.metrics": ["DIO"], "scatter.bubble": "Avg Qty"}, token=token))
 
-    # C9: Inventory Turnover Trend
-    d3_cards_def.append(make_card(
-        "D3-C9 Inventory Turnover Trend",
-        "SELECT period_key AS \"Period\", ROUND(value, 4) AS \"Inventory Turnover\"\n"
-        "FROM mart.kpi_snapshot\n"
-        "WHERE kpi_name = 'inventory_turnover'\n"
-        "  AND dimension = 'overall'\n"
-        "  AND period_key BETWEEN '2011Q2' AND '2014Q2'\n"
-        "ORDER BY period_key;",
-        db_id, "line", "Inventory turnover over quarters",
-        {"graph.colors": ["#F59E0B"]}, token))
+    # C9: Inventory Snapshot Summary
+    ids.append(card("C9 · Top 20 by Inventory Value",
+        "SELECT product_name AS \"Product\", category AS \"Category\", ROUND(avg_quantity,0) AS \"Avg Qty\", ROUND(inventory_value,0) AS \"Inv Value\", ROUND(days_inventory_outstanding,0) AS \"DIO\" FROM dw.ml_inventory_anomaly ORDER BY inventory_value DESC LIMIT 20",
+        "table", token=token))
 
-    # C10: Decision Support Actions by Priority
-    d3_cards_def.append(make_card(
-        "D3-C10 Decision Support Actions by Priority",
-        "SELECT priority AS \"Priority\", COUNT(*) AS \"Action Count\"\n"
-        "FROM dw.decision_support\n"
-        "GROUP BY priority\n"
-        "ORDER BY\n"
-        "    CASE priority\n"
-        "        WHEN 'CRITICAL' THEN 1\n"
-        "        WHEN 'HIGH' THEN 2\n"
-        "        WHEN 'MEDIUM' THEN 3\n"
-        "        WHEN 'LOW' THEN 4\n"
-        "        ELSE 5\n"
-        "    END;",
-        db_id, "bar", "Decision support actions by priority",
-        {"graph.colors": ["#DC2626", "#F59E0B"]}, token))
+    # C10: Actions by Priority
+    ids.append(card("C10 · Decision Support Actions by Priority",
+        "SELECT priority AS \"Priority\", COUNT(*) AS \"Actions\" FROM dw.decision_support GROUP BY priority ORDER BY CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END",
+        "bar", viz={"graph.colors": {"HIGH": "#DC2626", "MEDIUM": "#F59E0B", "LOW": "#94A3B8"}}, token=token))
 
-    # C11: High Priority Decision Support
-    d3_cards_def.append(make_card(
-        "D3-C11 High Priority Decision Support Actions",
-        "SELECT\n"
-        "    entity_type AS \"Entity Type\",\n"
-        "    entity_key AS \"Entity Key\",\n"
-        "    signal_type AS \"Signal Type\",\n"
-        "    priority AS \"Priority\",\n"
-        "    recommended_action AS \"Recommended Action\",\n"
-        "    reason AS \"Reason\"\n"
-        "FROM dw.decision_support\n"
-        "WHERE priority = 'HIGH'\n"
-        "ORDER BY _load_timestamp DESC\n"
-        "LIMIT 30;",
-        db_id, "table", "HIGH priority recommendations", {}, token))
+    # C11: High-Priority Actions
+    ids.append(card("C11 · High-Priority Actions",
+        "SELECT entity_type AS \"Entity\", signal_type AS \"Signal\", recommended_action AS \"Action\" FROM dw.decision_support WHERE priority='HIGH' ORDER BY entity_type LIMIT 30",
+        "table", token=token))
 
     # C12: Operational Decision Support
-    d3_cards_def.append(make_card(
-        "D3-C12 Operational Decision Support — Inventory/Product",
-        "SELECT\n"
-        "    entity_type AS \"Entity Type\",\n"
-        "    signal_type AS \"Signal Type\",\n"
-        "    priority AS \"Priority\",\n"
-        "    recommended_action AS \"Recommended Action\",\n"
-        "    reason AS \"Reason\"\n"
-        "FROM dw.decision_support\n"
-        "WHERE entity_type IN ('product', 'inventory', 'operations')\n"
-        "ORDER BY\n"
-        "    CASE priority\n"
-        "        WHEN 'HIGH' THEN 1\n"
-        "        WHEN 'MEDIUM' THEN 2\n"
-        "        ELSE 3\n"
-        "    END,\n"
-        "    _load_timestamp DESC\n"
-        "LIMIT 20;",
-        db_id, "table", "Operational recommendations for inventory/products", {}, token))
+    ids.append(card("C12 · Operational Decision Support (Inventory/Product)",
+        "SELECT signal_type AS \"Signal\", priority AS \"Priority\", recommended_action AS \"Action\" FROM dw.decision_support WHERE entity_type IN ('product','inventory','operations') ORDER BY CASE priority WHEN 'HIGH' THEN 1 WHEN 'MEDIUM' THEN 2 ELSE 3 END LIMIT 30",
+        "table", token=token))
 
-    d3 = make_dashboard("Inventory & Operational Decision Support",
-        "Inventory risk, zero-sales warning, decision support actions. "
-        "Data source: dw.ml_inventory_anomaly, dw.decision_support, mart.kpi_snapshot.", token)
+    d3 = dashboard("Inventory & Operational Decision Support",
+        "Inventory risk, zero-sales warning, decision support. Source: dw.ml_inventory_anomaly, dw.decision_support.", token)
     if d3:
         add_cards(d3, [
-            {"card_id": d3_cards_def[0], "row": 0, "col": 0, "size_x": 3, "size_y": 2},
-            {"card_id": d3_cards_def[1], "row": 0, "col": 3, "size_x": 3, "size_y": 2},
-            {"card_id": d3_cards_def[2], "row": 0, "col": 6, "size_x": 3, "size_y": 2},
-            {"card_id": d3_cards_def[3], "row": 0, "col": 9, "size_x": 3, "size_y": 2},
-            {"card_id": d3_cards_def[4], "row": 2, "col": 0, "size_x": 12, "size_y": 5},
-            {"card_id": d3_cards_def[5], "row": 7, "col": 0, "size_x": 6, "size_y": 4},
-            {"card_id": d3_cards_def[6], "row": 7, "col": 6, "size_x": 6, "size_y": 4},
-            {"card_id": d3_cards_def[7], "row": 11, "col": 0, "size_x": 6, "size_y": 4},
-            {"card_id": d3_cards_def[8], "row": 11, "col": 6, "size_x": 6, "size_y": 4},
-            {"card_id": d3_cards_def[9], "row": 15, "col": 0, "size_x": 4, "size_y": 4},
-            {"card_id": d3_cards_def[10], "row": 15, "col": 4, "size_x": 4, "size_y": 4},
-            {"card_id": d3_cards_def[11], "row": 15, "col": 8, "size_x": 4, "size_y": 4},
+            {"card_id": ids[0], "row": 0, "col": 0, "size_x": 24, "size_y": 2},
+            {"card_id": ids[1], "row": 2, "col": 0, "size_x": 6, "size_y": 3},
+            {"card_id": ids[2], "row": 2, "col": 6, "size_x": 6, "size_y": 3},
+            {"card_id": ids[3], "row": 2, "col": 12, "size_x": 6, "size_y": 3},
+            {"card_id": ids[4], "row": 2, "col": 18, "size_x": 6, "size_y": 3},
+            {"card_id": ids[5], "row": 5, "col": 0, "size_x": 24, "size_y": 6},
+            {"card_id": ids[6], "row": 11, "col": 0, "size_x": 12, "size_y": 6},
+            {"card_id": ids[7], "row": 11, "col": 12, "size_x": 12, "size_y": 6},
+            {"card_id": ids[8], "row": 17, "col": 0, "size_x": 12, "size_y": 6},
+            {"card_id": ids[9], "row": 17, "col": 12, "size_x": 12, "size_y": 6},
+            {"card_id": ids[10], "row": 23, "col": 0, "size_x": 8, "size_y": 6},
+            {"card_id": ids[11], "row": 23, "col": 8, "size_x": 8, "size_y": 6},
+            {"card_id": ids[12], "row": 23, "col": 16, "size_x": 8, "size_y": 6},
         ], token)
         log(f"Dashboard 3 created: id={d3}")
+    return d3, ids
 
-    log(f"\n=== Done ===")
-    log(f"D1 (Business Performance): id={d1}")
-    log(f"D2 (Product & Customer Analytics): id={d2}")
-    log(f"D3 (Inventory & Operational): id={d3}")
+# ══════════════════════════════════════════════════════════════════════
+def main():
+    log("=== Metabase Rebuild (spec-compliant) ===")
+    token = login()
+    cleanup(token)
+
+    d1, d1_ids = build_d1(token)
+    d2, d2_ids = build_d2(token)
+    d3, d3_ids = build_d3(token)
+
+    total = len(d1_ids) + len(d2_ids) + len(d3_ids)
+    log(f"\n=== Complete ===")
+    log(f"D1 (Business Performance): id={d1}, {len(d1_ids)} cards")
+    log(f"D2 (Product & Customer Analytics): id={d2}, {len(d2_ids)} cards")
+    log(f"D3 (Inventory & Operational): id={d3}, {len(d3_ids)} cards")
+    log(f"Total: {total} cards")
     log(f"Visit http://localhost:3000")
 
 if __name__ == "__main__":
-    build_all()
+    main()

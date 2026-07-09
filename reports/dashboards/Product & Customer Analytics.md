@@ -2,71 +2,61 @@
 
 ## 1. Mục tiêu Dashboard
 
-Dashboard **Product & Customer Analytics** phân tích khách hàng qua RFM segments (ML clustering), hiệu suất sản phẩm, và các khuyến nghị từ decision support engine.
+Dashboard **Product & Customer Analytics** phân tích khách hàng qua RFM segments (K-Means K=3, silhouette≈0.48), hiệu suất sản phẩm (ABC classification), hành vi KH.
 
-Câu hỏi chính:
-- Khách hàng được phân nhóm thế nào theo RFM? Mỗi nhóm đóng góp bao nhiêu?
-- Sản phẩm/danh mục nào bán chạy nhất?
-- Doanh thu phân bố thế nào theo loại khách hàng?
-- Hệ thống gợi ý hành động gì cho từng nhóm khách hàng?
-- Phân phối RFM cluster thay đổi thế nào qua các kỳ?
+Luồng đọc: **KPI → RFM Segments → ABC/Top Products → Top Customers → Segment Trend → Heatmap → Margin/Price**
 
 ## 2. Nguồn dữ liệu
 
-- **dw.ml_customer_segments**: K-Means clustering output (RFM) với nhãn cluster
-- **dw.fact_sales + dw.dim_product/dim_customer/dim_date**: Dữ liệu gốc cho product analytics
-- **dw.decision_support**: Khuyến nghị từ insight engine (entity_type = 'customer')
-- **mart.rfm_snapshot**: RFM cluster distribution theo từng kỳ
+- **dw.ml_customer_segments** — K-Means clustering output (RFM)
+- **mart.rfm_snapshot** — RFM cluster distribution theo quý
+- **dw.fact_sales + dw.dim_product/dim_customer/dim_date/dim_territory** — Dữ liệu gốc product & customer analytics
 
-## 3. Cards trong Dashboard
+## 3. Cards trong Dashboard (15 cards)
 
-### 3.1 Customer Segments Distribution
-- **Loại**: Bar chart
-- **Mô tả**: Số lượng khách hàng trong mỗi segment, kèm revenue
-- **Source**: `dw.ml_customer_segments GROUP BY cluster_label`
-- **ML Model**: K-Means với k=4 trên RFM features (recency, frequency, monetary)
+### Row 0 — Text heading
+### Row 1 — 4 Scalar (2014Q2)
+| Card | Source |
+|---|---|
+| C1 · Active Customers | dw.fact_sales |
+| C2 · Active Products | dw.fact_sales |
+| C3 · Units Sold | dw.fact_sales |
+| C4 · Revenue per Customer | dw.fact_sales |
 
-### 3.2 Customer Segment Details
-- **Loại**: Table
-- **Mô tả**: Chi tiết từng segment: số lượng, recency trung bình, frequency, monetary
-- **Source**: `dw.ml_customer_segments`
+### Row 2 — RFM Segments
+- **C5 · Customer Segments — RFM K-Means (K=3)** (bar, segment colors)
+- **C6 · RFM Segment Details** (table)
 
-### 3.3 Product Revenue by Category
-- **Loại**: Bar chart
-- **Mô tả**: Doanh thu theo danh mục sản phẩm kỳ hiện tại
-- **Source**: `dw.fact_sales + dw.dim_product`
+### Row 3 — Product Performance
+- **C7 · Revenue Share by ABC Product Class — 2014Q2** (bar, ABC colors)
+- **C8 · Top 10 Products by Revenue — 2014Q2** (horizontal bar)
 
-### 3.4 Top 10 Products
-- **Loại**: Bar chart
-- **Mô tả**: Top 10 sản phẩm theo doanh thu kỳ hiện tại
-- **Source**: `dw.fact_sales + dw.dim_product`
+### Row 4 — Full-width table
+- **C9 · Top 10 Customers — 2014Q2** (with Type, Country, Orders, Revenue)
 
-### 3.5 Revenue by Customer Type
-- **Loại**: Pie chart
-- **Mô tả**: Tỷ trọng doanh thu Store vs Individual
-- **Source**: `dw.fact_sales + dw.dim_customer`
+### Row 5 — Segment Trend + Territory Donut
+- **C10 · Customer Segment Share by Quarter** (line, 2013Q1→2014Q2)
+- **C11 · Revenue by Territory — 2014Q2** (donut — thay pie customer_type vì 100% Individual)
 
-### 3.6 Customer Decision Support
-- **Loại**: Table
-- **Mô tả**: Khuyến nghị từ ML insight engine cho entity_type = 'customer'
-- **Source**: `dw.decision_support WHERE entity_type = 'customer'`
-- **Tín hiệu**: Migration insights (Champions churn, Loyal churn, v.v.)
+### Row 6 — Heatmap full-width
+- **C12 · Revenue Heatmap — Customer Type × Category** (pivot table)
 
-### 3.7 RFM Cluster Share by Period
-- **Loại**: Table
-- **Mô tả**: Tỷ lệ % từng cluster theo từng kỳ (2013Q1 → 2014Q2)
-- **Source**: `mart.rfm_snapshot`
+### Row 7 — Margin + Price
+- **C13 · Gross Margin % by Category — 2014Q2** (bar)
+- **C14 · Cost vs Selling Price by Product** (scatter)
 
 ## 4. ML Model Details
 
 **RFM Clustering (K-Means)**:
 - Features: recency_days (đảo dấu), frequency, monetary
 - Scale: StandardScaler
-- Số cluster: 4 (k=4, chọn heuristic)
-- Silhouette score: ~0.46 (tương quan vừa phải)
-- Output: dw.ml_customer_segments
+- Chọn K: `choose_best_k` bằng silhouette score (k=2..7)
+- Số cluster tối ưu: **3** (silhouette ≈ 0.48)
+- Phân bố: Loyal Customers (14,078), Champions (4,149), Potential Loyalists (442)
 
-**Customer Migration**:
-- YoY comparison (cùng quý năm trước)
-- Output: mart.customer_migration + mart.rfm_snapshot
-- Tín hiệu: Churned (ngừng mua), New (mới), Downgraded (giảm cluster)
+## 5. Metabase Dashboard ID
+
+- **ID**: 21
+- **Số cards**: 15
+- **Layout**: 8 rows (heading → 4 scalar → 2 charts → 2 charts → table full → line+donut → pivot full → bar+scatter)
+- **Loại biểu đồ**: scalar, bar, horizontal bar (row), table, line, donut (pie), pivot table, scatter
