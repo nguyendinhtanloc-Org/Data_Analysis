@@ -52,7 +52,7 @@ from src.etl.load import (
     load_fact_inventory,
     refresh_daily_sales_agg,
 )
-from src.watermark import save_run_status
+from src.watermark import init_audit_tables, check_schema_version, save_run_status
 
 # Cấu hình logging cơ bản
 logging.basicConfig(
@@ -92,6 +92,13 @@ def run_full_etl_pipeline(use_incremental: bool = True) -> bool:
 
     pg_engine = create_postgres_engine()
     ms_engine = create_mssql_engine()
+
+    # Khởi tạo audit tables + kiểm tra schema version
+    init_audit_tables(pg_engine)
+    if not check_schema_version(pg_engine):
+        logger.error("Schema version mismatch — dừng pipeline. Chạy migration trước.")
+        save_run_status("FAILED_SCHEMA_MISMATCH")
+        return False
 
     # ==================================================================
     # BƯỚC 1: EXTRACT (read-only — không cần transaction)
@@ -203,7 +210,7 @@ def run_full_etl_pipeline(use_incremental: bool = True) -> bool:
             if not (is_post_valid and is_cross_valid):
                 raise RuntimeError(
                     f"Validation thất bại: post_load={is_post_valid}, cross_check={is_cross_valid}. "
-                    "ROALLB back toàn bộ."
+                    "ROLLBACK toàn bộ."
                 )
 
             # Nếu đến đây mà không có exception → COMMIT tự động

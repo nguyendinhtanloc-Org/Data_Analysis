@@ -190,8 +190,25 @@ def save_migration_to_mart(engine, df: pd.DataFrame) -> int:
     if df.empty:
         return 0
 
+    records = []
+    for _, row in df.iterrows():
+        records.append({
+            "customer_key": int(row["customer_key"]),
+            "prev_period_key": row["prev_period_key"],
+            "curr_period_key": row["curr_period_key"],
+            "prev_cluster": str(row["prev_cluster"]),
+            "curr_cluster": str(row["curr_cluster"]),
+            "prev_monetary": float(row["prev_monetary"]) if pd.notna(row["prev_monetary"]) else None,
+            "curr_monetary": float(row["curr_monetary"]) if pd.notna(row["curr_monetary"]) else None,
+            "is_churned": bool(row["is_churned"]),
+            "is_new": bool(row["is_new"]),
+            "calculated_at": row["calculated_at"],
+        })
+
+    BATCH = 1000
     with engine.begin() as conn:
-        for _, row in df.iterrows():
+        for i in range(0, len(records), BATCH):
+            batch = records[i:i + BATCH]
             conn.execute(
                 text("""
                     INSERT INTO mart.customer_migration
@@ -211,18 +228,7 @@ def save_migration_to_mart(engine, df: pd.DataFrame) -> int:
                         is_churned = EXCLUDED.is_churned,
                         is_new = EXCLUDED.is_new
                 """),
-                {
-                    "customer_key": int(row["customer_key"]),
-                    "prev_period_key": row["prev_period_key"],
-                    "curr_period_key": row["curr_period_key"],
-                    "prev_cluster": str(row["prev_cluster"]),
-                    "curr_cluster": str(row["curr_cluster"]),
-                    "prev_monetary": float(row["prev_monetary"]) if pd.notna(row["prev_monetary"]) else None,
-                    "curr_monetary": float(row["curr_monetary"]) if pd.notna(row["curr_monetary"]) else None,
-                    "is_churned": bool(row["is_churned"]),
-                    "is_new": bool(row["is_new"]),
-                    "calculated_at": row["calculated_at"],
-                },
+                batch,
             )
     return len(df)
 

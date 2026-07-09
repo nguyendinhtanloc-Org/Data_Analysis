@@ -366,5 +366,5 @@ def update_extract_watermarks(pg_engine=None) -> None:
         "Production.WorkOrder",
     ]
     for table in tables:
-        save_watermark(table, now)
+        save_watermark(table, now, engine=pg_engine)
     logger.info(f"Đã cập nhật watermark cho {len(tables)} bảng → {now.isoformat()}")

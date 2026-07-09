@@ -1,17 +1,14 @@
 """Snapshot Manager - Quản lý việc tính và lưu snapshot KPI định kỳ.
 
 Module này chịu trách nhiệm:
-  1. Đọc watermark snapshot từ config.json (snapshot_watermark)
+  1. Đọc watermark snapshot từ audit.snapshot_watermark trong PostgreSQL
   2. Xác định kỳ cần tính (Q1, Q2, ...) dựa trên watermark
   3. Gọi KPI calculator cho từng kỳ
   4. UPSERT vào mart.kpi_snapshot
   5. Cập nhật watermark snapshot
 """
-import fcntl
-import json
 import logging
 from datetime import datetime, date
-from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -24,43 +21,9 @@ from src.analytics.kpi_calculator import (
     get_year_boundaries,
     get_period_key,
 )
+from src.watermark import get_snapshot_watermark, save_snapshot_watermark
 
 logger = logging.getLogger(__name__)
-
-CONFIG_PATH = Path(__file__).parent.parent.parent / "config.json"
-_LOCK_PATH = CONFIG_PATH.with_suffix(".json.lock")
-
-
-def _load_config() -> dict:
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _save_config(config: dict) -> None:
-    lock_fd = None
-    try:
-        lock_fd = open(_LOCK_PATH, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
-        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-            json.dump(config, f, indent=2, default=str)
-    finally:
-        if lock_fd is not None:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
-            lock_fd.close()
-
-
-def get_snapshot_watermark() -> Optional[str]:
-    """Lấy watermark snapshot cuối cùng đã chạy."""
-    config = _load_config()
-    return config.get("snapshot_watermark")
-
-
-def save_snapshot_watermark(period_key: str) -> None:
-    """Lưu watermark snapshot."""
-    config = _load_config()
-    config["snapshot_watermark"] = period_key
-    config["last_snapshot_run"] = datetime.now().isoformat()
-    _save_config(config)
 
 
 def get_data_date_range(engine: Engine) -> tuple[int, int]:
@@ -98,7 +61,7 @@ def get_pending_periods(engine: Engine, snapshot_type: str = "Q") -> list[dict]:
             - year: int
             - quarter: int | None
     """
-    last_watermark = get_snapshot_watermark()
+    last_watermark = get_snapshot_watermark(engine=engine)
     min_year, max_year = get_data_date_range(engine)
 
     periods = []
@@ -178,7 +141,7 @@ def run_kpi_snapshot(engine: Engine, snapshot_type: str = "Q") -> int:
             total_rows += len(snapshot_rows)
             logger.info(f"  → Inserted {len(snapshot_rows)} KPI rows cho {period['period_key']}")
 
-        save_snapshot_watermark(period["period_key"])
+        save_snapshot_watermark(period["period_key"], snapshot_type=period["period_type"], engine=engine)
 
     logger.info(f"Hoàn tất KPI snapshot: {total_rows} rows cho {len(periods)} periods")
     return total_rows
