@@ -82,6 +82,7 @@ services:
       MSSQL_HOST: mssql
       POSTGRES_HOST: postgres
       PYTHONUNBUFFERED: "1"
+      PYTHONPATH: /app
 
     volumes:
       - ./:/app

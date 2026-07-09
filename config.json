@@ -1,19 +1,21 @@
 {
   "watermarks": {
-    "Sales.SalesOrderDetail": "2026-06-26T05:09:59.294219",
-    "Sales.SalesOrderHeader": "2026-06-26T05:09:59.294219",
-    "Production.Product": "2026-06-26T05:09:59.294219",
-    "Production.ProductSubcategory": "2026-06-26T05:09:59.294219",
-    "Production.ProductCategory": "2026-06-26T05:09:59.294219",
-    "Sales.Customer": "2026-06-26T05:09:59.294219",
-    "Person.Person": "2026-06-26T05:09:59.294219",
-    "Sales.SalesTerritory": "2026-06-26T05:09:59.294219",
-    "HumanResources.Employee": "2026-06-26T05:09:59.294219",
-    "HumanResources.EmployeeDepartmentHistory": "2026-06-26T05:09:59.294219",
-    "HumanResources.Department": "2026-06-26T05:09:59.294219",
-    "Production.ProductInventory": "2026-06-26T05:09:59.294219",
-    "Production.WorkOrder": "2026-06-26T05:09:59.294219"
+    "Sales.SalesOrderDetail": "2026-07-07T04:06:55.411176",
+    "Sales.SalesOrderHeader": "2026-07-07T04:06:55.411176",
+    "Production.Product": "2026-07-07T04:06:55.411176",
+    "Production.ProductSubcategory": "2026-07-07T04:06:55.411176",
+    "Production.ProductCategory": "2026-07-07T04:06:55.411176",
+    "Sales.Customer": "2026-07-07T04:06:55.411176",
+    "Person.Person": "2026-07-07T04:06:55.411176",
+    "Sales.SalesTerritory": "2026-07-07T04:06:55.411176",
+    "HumanResources.Employee": "2026-07-07T04:06:55.411176",
+    "HumanResources.EmployeeDepartmentHistory": "2026-07-07T04:06:55.411176",
+    "HumanResources.Department": "2026-07-07T04:06:55.411176",
+    "Production.ProductInventory": "2026-07-07T04:06:55.411176",
+    "Production.WorkOrder": "2026-07-07T04:06:55.411176"
   },
-  "last_run": "2026-06-26T05:09:59.293692",
-  "last_run_status": "SUCCESS"
+  "last_run": "2026-07-07T04:06:55.393986",
+  "last_run_status": "SUCCESS",
+  "snapshot_watermark": "2014Q4",
+  "last_snapshot_run": "2026-07-07T03:33:53.549509"
 }
